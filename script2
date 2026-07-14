@@ -4,43 +4,46 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ZERO_VECTOR = Vector3.zero
-local heartbeatConnection = nil
-local function setupCharacter(character)
-    if heartbeatConnection then
-        heartbeatConnection:Disconnect()
-        heartbeatConnection = nil
-    end
 
+-- Usamos un ID para saber cuál es el personaje actual y matar los loops viejos
+local loopId = 0 
+
+local function setupCharacter(character)
     if not character then return end
+    
+    -- Sumamos 1 al ID. Si el jugador respawnea rápido, el ID cambia y el loop anterior muere.
+    loopId += 1
+    local currentLoop = loopId
+    
+    -- Buscamos los componentes necesarios
     local hrp = character:WaitForChild("HumanoidRootPart", 5)
     local humanoid = character:WaitForChild("Humanoid", 5)
+    
     if hrp and humanoid then
-        heartbeatConnection = RunService.Heartbeat:Connect(function()
-            if not hrp.Parent or humanoid.Health <= 0 then
-                if heartbeatConnection then
-                    heartbeatConnection:Disconnect()
-                    heartbeatConnection = nil
+        task.spawn(function()
+            -- El ciclo solo corre si es el personaje actual, está vivo, y el HRP existe
+            while loopId == currentLoop and character.Parent and hrp.Parent and humanoid.Health > 0 do
+                local currentVelocity = hrp.AssemblyLinearVelocity
+                hrp.AssemblyLinearVelocity = ZERO_VECTOR
+                
+                RunService.RenderStepped:Wait()
+                
+                -- Doble validación después de la pausa (por si el juego borró al jugador en ese microsegundo)
+                if hrp.Parent then
+                    hrp.AssemblyLinearVelocity = currentVelocity
                 end
-                return
-            end
-
-            local currentVelocity = hrp.AssemblyLinearVelocity
-            hrp.AssemblyLinearVelocity = ZERO_VECTOR
-            RunService.RenderStepped:Wait()
-            hrp.AssemblyLinearVelocity = currentVelocity
-        end)
-
-        humanoid.Died:Once(function()
-            if heartbeatConnection then
-                heartbeatConnection:Disconnect()
-                heartbeatConnection = nil
+                
+                -- Esperamos al siguiente frame físico de forma segura
+                RunService.Heartbeat:Wait()
             end
         end)
     end
 end
 
+-- Conectamos la función cada que el personaje reaparece
 LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
+-- Lo ejecutamos por si el jugador ya estaba cargado al inyectar el script
 if LocalPlayer.Character then
     setupCharacter(LocalPlayer.Character)
 end
