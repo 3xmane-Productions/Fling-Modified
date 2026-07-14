@@ -1,0 +1,46 @@
+game:GetService("Workspace").FallenPartsDestroyHeight = 0/0
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ZERO_VECTOR = Vector3.zero
+local heartbeatConnection = nil
+local function setupCharacter(character)
+    if heartbeatConnection then
+        heartbeatConnection:Disconnect()
+        heartbeatConnection = nil
+    end
+
+    if not character then return end
+    local hrp = character:WaitForChild("HumanoidRootPart", 5)
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    if hrp and humanoid then
+        heartbeatConnection = RunService.Heartbeat:Connect(function()
+            if not hrp.Parent or humanoid.Health <= 0 then
+                if heartbeatConnection then
+                    heartbeatConnection:Disconnect()
+                    heartbeatConnection = nil
+                end
+                return
+            end
+
+            local currentVelocity = hrp.AssemblyLinearVelocity
+            hrp.AssemblyLinearVelocity = ZERO_VECTOR
+            RunService.RenderStepped:Wait()
+            hrp.AssemblyLinearVelocity = currentVelocity
+        end)
+
+        humanoid.Died:Once(function()
+            if heartbeatConnection then
+                heartbeatConnection:Disconnect()
+                heartbeatConnection = nil
+            end
+        end)
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(setupCharacter)
+
+if LocalPlayer.Character then
+    setupCharacter(LocalPlayer.Character)
+end
