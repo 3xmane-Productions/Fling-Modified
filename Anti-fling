@@ -1,0 +1,200 @@
+if getgenv().AdvancedAntiFlingStable then
+	return
+end
+getgenv().AdvancedAntiFlingStable = true
+
+--// SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+
+--// PLAYER
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+
+--// SETTINGS
+local Enabled = true
+local Radius = 35
+local Delay = 0.05
+
+--// GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AdvancedAntiFlingGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = game.CoreGui
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.new(0,180,0,75)
+Main.Position = UDim2.new(0.5,-90,0.2,0)
+Main.BackgroundColor3 = Color3.fromRGB(20,20,20)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Parent = ScreenGui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0,10)
+Corner.Parent = Main
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1,0,0,28)
+Title.BackgroundTransparency = 1
+Title.Text = "Advanced Anti-Fling"
+Title.Font = Enum.Font.GothamBold
+Title.TextColor3 = Color3.new(1,1,1)
+Title.TextSize = 14
+Title.Parent = Main
+
+local Toggle = Instance.new("TextButton")
+Toggle.Size = UDim2.new(0.8,0,0,30)
+Toggle.Position = UDim2.new(0.1,0,0.55,0)
+Toggle.BackgroundColor3 = Color3.fromRGB(0,170,0)
+Toggle.Text = "ON"
+Toggle.Font = Enum.Font.GothamBold
+Toggle.TextColor3 = Color3.new(1,1,1)
+Toggle.TextSize = 15
+Toggle.Parent = Main
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0,8)
+ToggleCorner.Parent = Toggle
+
+--// DRAG
+local dragging = false
+local dragStart
+local startPos
+
+Main.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = Main.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+
+		Main.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+--// TOGGLE
+Toggle.MouseButton1Click:Connect(function()
+	Enabled = not Enabled
+
+	if Enabled then
+		Toggle.Text = "ON"
+		Toggle.BackgroundColor3 = Color3.fromRGB(0,170,0)
+	else
+		Toggle.Text = "OFF"
+		Toggle.BackgroundColor3 = Color3.fromRGB(170,0,0)
+	end
+end)
+
+--// NOTIFICATION
+pcall(function()
+	StarterGui:SetCore("SendNotification",{
+		Title = "Anti-Fling",
+		Text = "Stable Protection Enabled",
+		Duration = 4
+	})
+end)
+
+--// CHARACTER UPDATE
+LocalPlayer.CharacterAdded:Connect(function(char)
+	Character = char
+end)
+
+--// PLAYER NOCOLLISION
+local function applyPlayerNoCollision(char)
+	for _,part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CanCollide = false
+		end
+	end
+end
+
+--// MAIN LOOP
+task.spawn(function()
+	while task.wait(Delay) do
+		if not Enabled then
+			continue
+		end
+
+		local Root = Character and Character:FindFirstChild("HumanoidRootPart")
+
+		if not Root then
+			continue
+		end
+
+		--// PLAYERS
+		for _,player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer then
+				local char = player.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+				if hrp then
+					local distance =
+						(hrp.Position - Root.Position).Magnitude
+
+					if distance <= Radius then
+						applyPlayerNoCollision(char)
+
+						-- anti fling stabilization
+						hrp.AssemblyAngularVelocity = Vector3.zero
+					end
+				end
+			end
+		end
+
+		--// UNANCHORED PARTS ONLY
+		local nearbyParts =
+			workspace:GetPartBoundsInRadius(
+				Root.Position,
+				Radius
+			)
+
+		for _,part in ipairs(nearbyParts) do
+			if part:IsA("BasePart")
+			and not part.Anchored
+			and not part:IsDescendantOf(Character) then
+
+				part.CanCollide = false
+			end
+		end
+	end
+end)
+
+--// EXTRA ANTI FLING
+RunService.Stepped:Connect(function()
+	if not Enabled then
+		return
+	end
+
+	local Root =
+		Character and Character:FindFirstChild("HumanoidRootPart")
+
+	if Root then
+		-- reduce absurd fling velocities
+		if Root.AssemblyAngularVelocity.Magnitude > 80 then
+			Root.AssemblyAngularVelocity = Vector3.zero
+		end
+
+		if Root.AssemblyLinearVelocity.Magnitude > 180 then
+			Root.AssemblyLinearVelocity *= 0.25
+		end
+	end
+end)
