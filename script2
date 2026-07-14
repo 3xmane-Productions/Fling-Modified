@@ -5,45 +5,65 @@ local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ZERO_VECTOR = Vector3.zero
 
--- Usamos un ID para saber cuál es el personaje actual y matar los loops viejos
-local loopId = 0 
+-- Usamos un booleano, es mucho más rápido y ligero de procesar que comparar IDs en cada frame
+local isSpoofingActive = false 
 
-local function setupCharacter(character)
+local function iniciarScript(character)
+    -- 1. Apagamos cualquier proceso anterior por seguridad antes de iniciar uno nuevo
+    isSpoofingActive = false 
+    
     if not character then return end
-    
-    -- Sumamos 1 al ID. Si el jugador respawnea rápido, el ID cambia y el loop anterior muere.
-    loopId += 1
-    local currentLoop = loopId
-    
-    -- Buscamos los componentes necesarios
-    local hrp = character:WaitForChild("HumanoidRootPart", 5)
+
     local humanoid = character:WaitForChild("Humanoid", 5)
-    
-    if hrp and humanoid then
-        task.spawn(function()
-            -- El ciclo solo corre si es el personaje actual, está vivo, y el HRP existe
-            while loopId == currentLoop and character.Parent and hrp.Parent and humanoid.Health > 0 do
-                local currentVelocity = hrp.AssemblyLinearVelocity
-                hrp.AssemblyLinearVelocity = ZERO_VECTOR
-                
-                RunService.RenderStepped:Wait()
-                
-                -- Doble validación después de la pausa (por si el juego borró al jugador en ese microsegundo)
-                if hrp.Parent then
-                    hrp.AssemblyLinearVelocity = currentVelocity
-                end
-                
-                -- Esperamos al siguiente frame físico de forma segura
-                RunService.Heartbeat:Wait()
+    local hrp = character:WaitForChild("HumanoidRootPart", 5)
+
+    -- Si algo falló en la carga del juego, cancelamos para evitar errores rojos
+    if not humanoid or not hrp then return end
+
+    -- 2. Encendemos el interruptor para el nuevo personaje
+    isSpoofingActive = true
+
+    -- 3. EVENTO DE MUERTE: Esta es la clave. Apaga el script instantáneamente en el frame que mueres.
+    local connectionMuerte
+    connectionMuerte = humanoid.Died:Connect(function()
+        isSpoofingActive = false -- Esto rompe el ciclo 'while' de abajo al instante
+        if connectionMuerte then
+            connectionMuerte:Disconnect()
+            connectionMuerte = nil
+        end
+    end)
+
+    -- 4. El ciclo de spoofing (ahora mucho más limpio)
+    task.spawn(function()
+        -- El ciclo solo vive mientras isSpoofingActive sea true y las partes existan
+        while isSpoofingActive and character.Parent and hrp.Parent do
+            local currentVelocity = hrp.AssemblyLinearVelocity
+            hrp.AssemblyLinearVelocity = ZERO_VECTOR
+            
+            -- Esperamos al renderizado
+            RunService.RenderStepped:Wait()
+            
+            -- Verificación ultra rápida antes de regresar la velocidad
+            if isSpoofingActive and hrp.Parent then
+                hrp.AssemblyLinearVelocity = currentVelocity
             end
-        end)
-    end
+            
+            -- Sincronizamos con las físicas del servidor
+            RunService.Heartbeat:Wait()
+        end
+    end)
 end
 
--- Conectamos la función cada que el personaje reaparece
-LocalPlayer.CharacterAdded:Connect(setupCharacter)
+-- Se ejecuta cada vez que el juego te da un nuevo personaje (reaparición)
+LocalPlayer.CharacterAdded:Connect(function(nuevoPersonaje)
+    iniciarScript(nuevoPersonaje)
+end)
 
--- Lo ejecutamos por si el jugador ya estaba cargado al inyectar el script
+-- Arranque inicial por si ya estabas vivo al inyectar el script
 if LocalPlayer.Character then
-    setupCharacter(LocalPlayer.Character)
+    local currentHumanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
+    -- Solo arrancamos si estás vivo al momento de inyectar
+    if currentHumanoid and currentHumanoid.Health > 0 then
+        iniciarScript(LocalPlayer.Character)
+    end
 end
