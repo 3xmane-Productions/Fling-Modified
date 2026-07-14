@@ -1,0 +1,1139 @@
+﻿--// SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+--// PLAYER
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HRP = Character:WaitForChild("HumanoidRootPart")
+
+LocalPlayer.CharacterAdded:Connect(function(c)
+	Character = c
+	HRP = c:WaitForChild("HumanoidRootPart")
+end)
+
+----------------------------------------------------
+-- NETWORK / PART CONTROL
+----------------------------------------------------
+
+getgenv().Network = getgenv().Network or {
+	BaseParts = {}
+}
+
+local Network = getgenv().Network
+
+local function retainPart(part)
+
+	if not part:IsA("BasePart") then
+		return
+	end
+
+	if not part:IsDescendantOf(workspace) then
+		return
+	end
+
+	if part:IsDescendantOf(Character) then
+		return
+	end
+
+	if table.find(Network.BaseParts, part) then
+		return
+	end
+
+	table.insert(Network.BaseParts, part)
+
+	pcall(function()
+		part.CustomPhysicalProperties =
+			PhysicalProperties.new(0,0,0,0,0)
+	end)
+end
+
+for _, v in ipairs(workspace:GetDescendants()) do
+	retainPart(v)
+end
+
+workspace.DescendantAdded:Connect(retainPart)
+
+----------------------------------------------------
+-- KEEP NETWORK OWNERSHIP
+----------------------------------------------------
+
+RunService.Heartbeat:Connect(function()
+
+	pcall(function()
+		sethiddenproperty(LocalPlayer,"SimulationRadius",math.huge)
+	end)
+
+	for i = #Network.BaseParts, 1, -1 do
+
+		local part = Network.BaseParts[i]
+
+		if not part
+			or not part.Parent
+			or not part:IsDescendantOf(workspace)
+		then
+			table.remove(Network.BaseParts,i)
+		end
+	end
+end)
+
+----------------------------------------------------
+-- VARIABLES
+----------------------------------------------------
+
+local currentEffect = nil
+local effectConnection = nil
+
+local collisionEnabled = true
+local playersCollision = true
+
+local selectedPlayer = nil
+
+----------------------------------------------------
+-- GUI
+----------------------------------------------------
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AdvancedPhysicsGUI"
+gui.ResetOnSpawn = false
+gui.Parent = PlayerGui
+
+----------------------------------------------------
+-- MAIN FRAME
+----------------------------------------------------
+
+local Main = Instance.new("Frame")
+Main.Parent = gui
+
+Main.Size = UDim2.new(0,430,0,520)
+Main.Position = UDim2.new(0.5,-215,0.5,-260)
+
+Main.BackgroundColor3 = Color3.fromRGB(18,18,18)
+Main.BorderSizePixel = 0
+
+Instance.new("UICorner",Main).CornerRadius = UDim.new(0,18)
+
+local Stroke = Instance.new("UIStroke")
+Stroke.Parent = Main
+Stroke.Color = Color3.fromRGB(70,70,70)
+
+----------------------------------------------------
+-- DRAGGING
+----------------------------------------------------
+
+local dragging = false
+local dragStart
+local startPos
+local dragInput
+
+local function updateDrag(input)
+
+	local delta = input.Position - dragStart
+
+	Main.Position = UDim2.new(
+		startPos.X.Scale,
+		startPos.X.Offset + delta.X,
+		startPos.Y.Scale,
+		startPos.Y.Offset + delta.Y
+	)
+end
+
+Main.InputBegan:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+
+		dragging = true
+		dragStart = input.Position
+		startPos = Main.Position
+
+		input.Changed:Connect(function()
+
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+Main.InputChanged:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+
+	if input == dragInput and dragging then
+		updateDrag(input)
+	end
+end)
+
+----------------------------------------------------
+-- TITLE
+----------------------------------------------------
+
+local Title = Instance.new("TextLabel")
+Title.Parent = Main
+
+Title.Size = UDim2.new(1,0,0,45)
+Title.BackgroundTransparency = 1
+
+Title.Text = "Advanced Physics Controller"
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 20
+Title.TextColor3 = Color3.new(1,1,1)
+
+----------------------------------------------------
+-- EFFECT STATUS
+----------------------------------------------------
+
+local Status = Instance.new("TextLabel")
+Status.Parent = Main
+
+Status.Size = UDim2.new(1,0,0,20)
+Status.Position = UDim2.new(0,0,0,40)
+
+Status.BackgroundTransparency = 1
+Status.Text = "Effect: None"
+
+Status.Font = Enum.Font.Gotham
+Status.TextSize = 14
+Status.TextColor3 = Color3.fromRGB(0,255,120)
+
+----------------------------------------------------
+-- TARGET STATUS
+----------------------------------------------------
+
+local TargetStatus = Instance.new("TextLabel")
+TargetStatus.Parent = Main
+
+TargetStatus.Size = UDim2.new(1,0,0,18)
+TargetStatus.Position = UDim2.new(0,0,0,58)
+
+TargetStatus.BackgroundTransparency = 1
+TargetStatus.Text = "Target: Yourself"
+
+TargetStatus.Font = Enum.Font.Gotham
+TargetStatus.TextSize = 13
+TargetStatus.TextColor3 = Color3.fromRGB(255,255,255)
+
+----------------------------------------------------
+-- COLLISION STATUS
+----------------------------------------------------
+
+local CollisionStatus = Instance.new("TextLabel")
+CollisionStatus.Parent = Main
+
+CollisionStatus.Size = UDim2.new(1,0,0,18)
+CollisionStatus.Position = UDim2.new(0,0,0,76)
+
+CollisionStatus.BackgroundTransparency = 1
+CollisionStatus.Text = "Parts Collision: ON"
+
+CollisionStatus.Font = Enum.Font.Gotham
+CollisionStatus.TextSize = 13
+CollisionStatus.TextColor3 = Color3.fromRGB(0,255,120)
+
+----------------------------------------------------
+-- PLAYER COLLISION STATUS
+----------------------------------------------------
+
+local PlayerCollisionStatus = Instance.new("TextLabel")
+PlayerCollisionStatus.Parent = Main
+
+PlayerCollisionStatus.Size = UDim2.new(1,0,0,18)
+PlayerCollisionStatus.Position = UDim2.new(0,0,0,94)
+
+PlayerCollisionStatus.BackgroundTransparency = 1
+PlayerCollisionStatus.Text = "Players Collision: ON"
+
+PlayerCollisionStatus.Font = Enum.Font.Gotham
+PlayerCollisionStatus.TextSize = 13
+PlayerCollisionStatus.TextColor3 = Color3.fromRGB(0,255,120)
+
+----------------------------------------------------
+-- PLAYER SEARCH BOX
+----------------------------------------------------
+
+local SearchBox = Instance.new("TextBox")
+SearchBox.Parent = Main
+
+SearchBox.Size = UDim2.new(1,-20,0,38)
+SearchBox.Position = UDim2.new(0,10,0,118)
+
+SearchBox.BackgroundColor3 = Color3.fromRGB(28,28,28)
+SearchBox.BorderSizePixel = 0
+
+SearchBox.PlaceholderText = "Target Player (Username or DisplayName)"
+SearchBox.Text = ""
+
+SearchBox.Font = Enum.Font.Gotham
+SearchBox.TextSize = 14
+SearchBox.TextColor3 = Color3.new(1,1,1)
+
+Instance.new("UICorner",SearchBox).CornerRadius = UDim.new(0,10)
+
+----------------------------------------------------
+-- PLAYER FINDER
+----------------------------------------------------
+
+local function findPlayer(str)
+
+	str = string.lower(str)
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+
+		if string.sub(
+			string.lower(plr.Name),
+			1,
+			#str
+		) == str then
+
+			return plr
+		end
+
+		if string.sub(
+			string.lower(plr.DisplayName),
+			1,
+			#str
+		) == str then
+
+			return plr
+		end
+	end
+end
+
+SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+
+	local text = SearchBox.Text
+
+	if text == "" then
+		selectedPlayer = nil
+		TargetStatus.Text = "Target: Yourself"
+		return
+	end
+
+	local found = findPlayer(text)
+
+	if found then
+		selectedPlayer = found
+		TargetStatus.Text =
+			"Target: "..found.Name
+	else
+		selectedPlayer = nil
+		TargetStatus.Text =
+			"Target: Not Found"
+	end
+end)
+
+----------------------------------------------------
+-- HOLDER
+----------------------------------------------------
+
+local Holder = Instance.new("Frame")
+Holder.Parent = Main
+
+Holder.Size = UDim2.new(1,-20,1,-185)
+Holder.Position = UDim2.new(0,10,0,170)
+
+Holder.BackgroundTransparency = 1
+
+local Grid = Instance.new("UIGridLayout")
+Grid.Parent = Holder
+
+Grid.CellSize = UDim2.new(0.48,0,0,45)
+Grid.CellPadding = UDim2.new(0,8,0,8)
+
+----------------------------------------------------
+-- BUTTON CREATOR
+----------------------------------------------------
+
+local function createButton(text,color)
+
+	local b = Instance.new("TextButton")
+	b.Parent = Holder
+
+	b.BackgroundColor3 = color
+	b.BorderSizePixel = 0
+
+	b.Text = text
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 14
+	b.TextColor3 = Color3.new(1,1,1)
+
+	Instance.new("UICorner",b).CornerRadius = UDim.new(0,12)
+
+	b.MouseEnter:Connect(function()
+
+		TweenService:Create(
+			b,
+			TweenInfo.new(0.15),
+			{
+				BackgroundTransparency = 0.2
+			}
+		):Play()
+
+	end)
+
+	b.MouseLeave:Connect(function()
+
+		TweenService:Create(
+			b,
+			TweenInfo.new(0.15),
+			{
+				BackgroundTransparency = 0
+			}
+		):Play()
+
+	end)
+
+	return b
+end
+
+----------------------------------------------------
+-- EFFECT SYSTEM
+----------------------------------------------------
+
+local function stopEffect()
+
+	currentEffect = nil
+
+	Status.Text = "Effect: None"
+
+	if effectConnection then
+		effectConnection:Disconnect()
+		effectConnection = nil
+	end
+end
+
+local function startEffect(name,func)
+
+	if currentEffect == name then
+		stopEffect()
+		return
+	end
+
+	stopEffect()
+
+	currentEffect = name
+
+	Status.Text = "Effect: "..name
+
+	effectConnection =
+		RunService.Heartbeat:Connect(func)
+end
+
+----------------------------------------------------
+-- GET TARGET HRP
+----------------------------------------------------
+
+local function getTargetHRP()
+
+	if selectedPlayer
+		and selectedPlayer.Character
+		and selectedPlayer.Character:FindFirstChild("HumanoidRootPart")
+	then
+		return selectedPlayer.Character.HumanoidRootPart
+	end
+
+	return HRP
+end
+
+----------------------------------------------------
+-- GET VALID PARTS
+----------------------------------------------------
+
+local function getParts()
+
+	local valid = {}
+
+	for _, part in ipairs(Network.BaseParts) do
+
+		if part
+			and part.Parent
+			and not part.Anchored
+			and not part:IsDescendantOf(Character)
+		then
+
+			local dist =
+				(part.Position - HRP.Position).Magnitude
+
+			if dist <= 1500 then
+				table.insert(valid, part)
+			end
+		end
+	end
+
+	return valid
+end
+
+----------------------------------------------------
+-- LIFT
+----------------------------------------------------
+
+createButton(
+	"Lift",
+	Color3.fromRGB(60,120,255)
+).MouseButton1Click:Connect(function()
+
+	startEffect("Lift",function()
+
+		for _, part in ipairs(getParts()) do
+			part.AssemblyLinearVelocity =
+				Vector3.new(0,35,0)
+		end
+	end)
+end)
+
+----------------------------------------------------
+-- ORBIT
+----------------------------------------------------
+
+local orbitTick = 0
+
+createButton(
+	"Orbit",
+	Color3.fromRGB(0,220,170)
+).MouseButton1Click:Connect(function()
+
+	startEffect("Orbit",function()
+
+		orbitTick += 0.05
+
+		local targetHRP = getTargetHRP()
+
+		for _, part in ipairs(getParts()) do
+
+			local target =
+				targetHRP.Position
+				+ Vector3.new(
+					math.cos(orbitTick) * 25,
+					8,
+					math.sin(orbitTick) * 25
+				)
+
+			part.AssemblyLinearVelocity =
+				(target - part.Position) * 6
+		end
+	end)
+end)
+
+----------------------------------------------------
+-- CHAOS
+----------------------------------------------------
+
+createButton(
+	"Chaos",
+	Color3.fromRGB(255,50,50)
+).MouseButton1Click:Connect(function()
+
+	startEffect("Chaos",function()
+
+		for _, part in ipairs(getParts()) do
+
+			part.AssemblyLinearVelocity =
+				Vector3.new(
+					math.random(-120,120),
+					math.random(20,120),
+					math.random(-120,120)
+				)
+		end
+	end)
+end)
+
+----------------------------------------------------
+-- SPIN
+----------------------------------------------------
+
+createButton(
+	"Spin",
+	Color3.fromRGB(180,0,255)
+).MouseButton1Click:Connect(function()
+
+	startEffect("Spin",function()
+
+		for _, part in ipairs(getParts()) do
+
+			part.AssemblyAngularVelocity =
+				Vector3.new(40,40,40)
+		end
+	end)
+end)
+
+----------------------------------------------------
+-- ELEVATOR
+----------------------------------------------------
+
+local elevatorTick = 0
+
+createButton(
+	"Elevator",
+	Color3.fromRGB(255,255,80)
+).MouseButton1Click:Connect(function()
+
+	startEffect("Elevator",function()
+
+		elevatorTick += 0.55
+
+		local targetHRP = getTargetHRP()
+
+		for _, part in ipairs(getParts()) do
+
+			local offset =
+				Vector3.new(
+					math.random(-7,7),
+					math.sin(elevatorTick) * 16,
+					math.random(-7,7)
+				)
+
+			local targetPos =
+				targetHRP.Position
+				+ offset
+				- Vector3.new(0,8,0)
+
+			part.AssemblyLinearVelocity =
+				(targetPos - part.Position) * 14
+
+			-- Giro en su propio eje
+			part.AssemblyAngularVelocity =
+				Vector3.new(
+					45,
+					45,
+					45
+				)
+		end
+	end)
+end)
+
+----------------------------------------------------
+-- THROW
+----------------------------------------------------
+
+local mouse = LocalPlayer:GetMouse()
+local throwMode = false
+
+local ThrowButton = createButton(
+	"Throw",
+	Color3.fromRGB(255,140,60)
+)
+
+ThrowButton.MouseButton1Click:Connect(function()
+
+	throwMode = true
+
+	Status.Text = "Effect: Click to Throw"
+
+end)
+
+mouse.Button1Down:Connect(function()
+
+	if not throwMode then
+		return
+	end
+
+	throwMode = false
+
+	local targetPosition = mouse.Hit.Position
+
+	for _, part in ipairs(getParts()) do
+
+		local direction =
+			(targetPosition - part.Position).Unit
+
+		part.AssemblyLinearVelocity =
+	(direction * 850)
+	+ Vector3.new(0,120,0)
+
+	part.AssemblyAngularVelocity =
+	Vector3.new(
+		math.random(-250,250),
+		math.random(-250,250),
+		math.random(-250,250)
+	)
+	end
+
+	Status.Text = "Effect: None"
+
+end)
+
+----------------------------------------------------
+-- CLICK TP
+----------------------------------------------------
+
+local clickTpMode = false
+
+local ClickTPButton = createButton(
+	"Click Tp",
+	Color3.fromRGB(255,80,180)
+)
+
+ClickTPButton.MouseButton1Click:Connect(function()
+
+	clickTpMode = true
+
+	Status.Text = "Effect: Click To TP"
+
+end)
+
+mouse.Button1Down:Connect(function()
+
+	if not clickTpMode then
+		return
+	end
+
+	clickTpMode = false
+
+	local targetPosition = mouse.Hit.Position
+
+	for _, part in ipairs(getParts()) do
+
+		if not part then
+			continue
+		end
+
+		if not part.Parent then
+			continue
+		end
+
+		if part.Anchored then
+			continue
+		end
+
+		if not part:IsA("BasePart") then
+			continue
+		end
+
+		if not part:IsDescendantOf(workspace) then
+			continue
+		end
+
+		local model =
+			part:FindFirstAncestorOfClass("Model")
+
+		if model and model:FindFirstChildOfClass("Humanoid") then
+			continue
+		end
+
+		if part.AssemblyMass > 10000 then
+			continue
+		end
+
+		pcall(function()
+
+			part.AssemblyLinearVelocity =
+				Vector3.zero
+
+			part.AssemblyAngularVelocity =
+				Vector3.zero
+
+			part.CFrame = CFrame.new(
+				targetPosition
+				+ Vector3.new(
+					math.random(-4,4),
+					math.random(-4,4),
+					math.random(-4,4)
+				)
+			)
+
+		end)
+	end
+
+	Status.Text = "Effect: None"
+
+end)
+
+----------------------------------------------------
+-- BLACK HOLE
+----------------------------------------------------
+
+local blackHoleHolding = false
+local blackHolePosition = nil
+
+local BlackHoleButton = createButton(
+	"Black Hole",
+	Color3.fromRGB(20,20,20)
+)
+
+BlackHoleButton.MouseButton1Click:Connect(function()
+
+	blackHoleHolding = true
+
+	Status.Text = "Effect: Hold Click For Black Hole"
+
+end)
+
+mouse.Button1Down:Connect(function()
+
+	if not blackHoleHolding then
+		return
+	end
+
+	startEffect("Black Hole",function()
+
+		blackHolePosition = mouse.Hit.Position
+
+		for _, part in ipairs(getParts()) do
+
+			------------------------------------------------
+			-- STRICT FILTER
+			------------------------------------------------
+
+			if not part then
+				continue
+			end
+
+			if not part.Parent then
+				continue
+			end
+
+			if part.Anchored then
+				continue
+			end
+
+			if not part:IsA("BasePart") then
+				continue
+			end
+
+			if not part:IsDescendantOf(workspace) then
+				continue
+			end
+
+			------------------------------------------------
+			-- IGNORE PLAYERS / NPCS
+			------------------------------------------------
+
+			local model =
+				part:FindFirstAncestorOfClass("Model")
+
+			if model and model:FindFirstChildOfClass("Humanoid") then
+				continue
+			end
+
+			------------------------------------------------
+			-- IGNORE MASSIVE MAP OBJECTS
+			------------------------------------------------
+
+			if part.AssemblyMass > 10000 then
+				continue
+			end
+
+			------------------------------------------------
+			-- BLACK HOLE FORCE
+			------------------------------------------------
+
+			local offset =
+				Vector3.new(
+					math.random(-3,3),
+					math.random(-3,3),
+					math.random(-3,3)
+				)
+
+			local targetPos =
+				blackHolePosition + offset
+
+			part.AssemblyLinearVelocity =
+				(targetPos - part.Position) * 32
+
+			part.AssemblyAngularVelocity =
+				Vector3.new(
+					220,
+					220,
+					220
+				)
+		end
+	end)
+end)
+
+mouse.Button1Up:Connect(function()
+
+	if currentEffect == "Black Hole" then
+
+		stopEffect()
+
+		blackHoleHolding = false
+		blackHolePosition = nil
+	end
+end)
+
+----------------------------------------------------
+-- AGGRESSIVE BRING
+----------------------------------------------------
+
+createButton(
+	"Aggressive Bring",
+	Color3.fromRGB(255,70,70)
+).MouseButton1Click:Connect(function()
+
+	startEffect("Aggressive Bring",function()
+
+		local targetHRP = getTargetHRP()
+
+		for _, part in ipairs(getParts()) do
+
+			------------------------------------------------
+			-- STRICT FILTER
+			------------------------------------------------
+
+			if not part then
+				continue
+			end
+
+			if not part.Parent then
+				continue
+			end
+
+			if part.Anchored then
+				continue
+			end
+
+			if not part:IsA("BasePart") then
+				continue
+			end
+
+			if not part:IsDescendantOf(workspace) then
+				continue
+			end
+
+			------------------------------------------------
+			-- IGNORE PLAYERS / NPCS
+			------------------------------------------------
+
+			local model =
+				part:FindFirstAncestorOfClass("Model")
+
+			if model and model:FindFirstChildOfClass("Humanoid") then
+				continue
+			end
+
+			------------------------------------------------
+			-- IGNORE HEAVY MAP OBJECTS
+			------------------------------------------------
+
+			if part.AssemblyMass > 10000 then
+				continue
+			end
+
+			------------------------------------------------
+			-- AGGRESSIVE TELEPORT
+			------------------------------------------------
+
+			pcall(function()
+
+				part.AssemblyLinearVelocity =
+					Vector3.zero
+
+				part.AssemblyAngularVelocity =
+					Vector3.new(
+						35,
+						35,
+						35
+					)
+
+				part.CFrame =
+					targetHRP.CFrame
+					* CFrame.new(
+						math.random(-6,6),
+						math.random(-4,4),
+						math.random(-6,6)
+					)
+			end)
+		end
+	end)
+end)
+----------------------------------------------------
+-- NO COLLIDE
+----------------------------------------------------
+
+createButton(
+	"No Collide",
+	Color3.fromRGB(255,170,0)
+).MouseButton1Click:Connect(function()
+
+	collisionEnabled = false
+
+	CollisionStatus.Text = "Parts Collision: OFF"
+	CollisionStatus.TextColor3 =
+		Color3.fromRGB(255,170,0)
+
+	for _, part in ipairs(getParts()) do
+		part.CanCollide = false
+	end
+end)
+
+----------------------------------------------------
+-- COLLIDE
+----------------------------------------------------
+
+createButton(
+	"Collide",
+	Color3.fromRGB(0,255,120)
+).MouseButton1Click:Connect(function()
+
+	collisionEnabled = true
+
+	CollisionStatus.Text = "Parts Collision: ON"
+	CollisionStatus.TextColor3 =
+		Color3.fromRGB(0,255,120)
+
+	for _, part in ipairs(getParts()) do
+		part.CanCollide = true
+	end
+end)
+
+----------------------------------------------------
+-- PLAYER COLLISION TOGGLE
+----------------------------------------------------
+
+createButton(
+	"Players Collision",
+	Color3.fromRGB(120,120,255)
+).MouseButton1Click:Connect(function()
+
+	playersCollision = not playersCollision
+
+	PlayerCollisionStatus.Text =
+		"Players Collision: " ..
+		(playersCollision and "ON" or "OFF")
+
+	PlayerCollisionStatus.TextColor3 =
+		playersCollision
+		and Color3.fromRGB(0,255,120)
+		or Color3.fromRGB(255,170,0)
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+
+		if plr ~= LocalPlayer and plr.Character then
+
+			for _, v in ipairs(plr.Character:GetDescendants()) do
+
+				if v:IsA("BasePart") then
+
+					v.CanCollide = playersCollision
+				end
+			end
+		end
+	end
+end)
+
+----------------------------------------------------
+-- STOP ALL
+----------------------------------------------------
+
+createButton(
+	"Stop All",
+	Color3.fromRGB(255,60,60)
+).MouseButton1Click:Connect(function()
+
+	stopEffect()
+
+	for _, part in ipairs(Network.BaseParts) do
+
+		if part and part.Parent then
+
+			pcall(function()
+
+				part.AssemblyLinearVelocity =
+					Vector3.zero
+
+				part.AssemblyAngularVelocity =
+					Vector3.zero
+
+				part.CanCollide =
+					collisionEnabled
+
+			end)
+		end
+	end
+
+	if Character then
+
+		for _, v in ipairs(Character:GetDescendants()) do
+
+			if v:IsA("BasePart") then
+
+				pcall(function()
+
+					v.AssemblyLinearVelocity =
+						Vector3.zero
+
+					v.AssemblyAngularVelocity =
+						Vector3.zero
+
+				end)
+			end
+		end
+	end
+
+	Status.Text = "Effect: None"
+
+end)
+
+----------------------------------------------------
+-- MINIMIZE
+----------------------------------------------------
+
+local Minimize = Instance.new("TextButton")
+Minimize.Parent = Main
+
+Minimize.Size = UDim2.new(0,28,0,28)
+Minimize.Position = UDim2.new(1,-36,0,8)
+
+Minimize.Text = "-"
+Minimize.Font = Enum.Font.GothamBold
+Minimize.TextSize = 18
+
+Minimize.BackgroundColor3 =
+	Color3.fromRGB(35,35,35)
+
+Minimize.TextColor3 = Color3.new(1,1,1)
+
+Minimize.BorderSizePixel = 0
+
+Instance.new(
+	"UICorner",
+	Minimize
+).CornerRadius = UDim.new(1,0)
+
+local minimized = false
+
+Minimize.MouseButton1Click:Connect(function()
+
+	minimized = not minimized
+
+	if minimized then
+
+		Holder.Visible = false
+		SearchBox.Visible = false
+
+		Main:TweenSize(
+			UDim2.new(0,430,0,110),
+			Enum.EasingDirection.Out,
+			Enum.EasingStyle.Quad,
+			0.2,
+			true
+		)
+
+		Minimize.Text = "+"
+
+	else
+
+		Holder.Visible = true
+		SearchBox.Visible = true
+
+		Main:TweenSize(
+			UDim2.new(0,430,0,520),
+			Enum.EasingDirection.Out,
+			Enum.EasingStyle.Quad,
+			0.2,
+			true
+		)
+
+		Minimize.Text = "-"
+
+	end
+end)
