@@ -1,0 +1,19 @@
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local ASSET_ID = "rbxassetid://6695644299"
+
+local function runScript()
+    pcall(function()
+        loadstring(game:GetObjects(ASSET_ID)[1].Source)()
+    end)
+end
+
+-- Ejecutar al inicio
+runScript()
+
+-- Ejecutar cada vez que reaparece el personaje
+player.CharacterAdded:Connect(function()
+    task.wait(1) -- pequeño delay para asegurar que cargue bien
+    runScript()
+end)
