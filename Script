@@ -6,7 +6,7 @@ local Mouse = Player:GetMouse()
 
 -- GUI Setup
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "KilasikFlingGUI"
+ScreenGui.Name = "3xmane Fling"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 
@@ -31,7 +31,7 @@ TitleBar.Parent = MainFrame
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -30, 1, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "KILASIK'S MULTI-FLING"
+Title.Text = "3xmane Fling"
 Title.TextColor3 = Color3.fromRGB(255, 80, 80)
 Title.Font = Enum.Font.SourceSansBold
 Title.TextSize = 18
@@ -367,4 +367,4 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 UpdateStatus()
-Message("Loaded", "KILASIK's Custom Target Fling GUI loaded!", 3)
+Message("Loaded", "3xmane's Custom Target Fling GUI loaded!", 3)
