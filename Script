@@ -10,10 +10,10 @@ ScreenGui.Name = "3xmane Fling"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 
--- Main Frame (Ajustado de tamaño para el nuevo diseño)
+-- Main Frame
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 300, 0, 260)
-MainFrame.Position = UDim2.new(0.5, -150, 0.5, -130)
+MainFrame.Size = UDim2.new(0, 300, 0, 315)
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -157)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -100,71 +100,80 @@ ClickSelectButton.Parent = MainFrame
 
 -- Start Fling Button
 local StartButton = Instance.new("TextButton")
-StartButton.Position = UDim2.new(0, 10, 0, 195)
+StartButton.Position = UDim2.new(0, 10, 0, 185)
 StartButton.Size = UDim2.new(0.5, -15, 0, 40)
 StartButton.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
 StartButton.BorderSizePixel = 0
 StartButton.Text = "START FLING"
 StartButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 StartButton.Font = Enum.Font.SourceSansBold
-StartButton.TextSize = 18
+StartButton.TextSize = 16
 StartButton.Parent = MainFrame
 
 -- Stop Fling Button
 local StopButton = Instance.new("TextButton")
-StopButton.Position = UDim2.new(0.5, 5, 0, 195)
+StopButton.Position = UDim2.new(0.5, 5, 0, 185)
 StopButton.Size = UDim2.new(0.5, -15, 0, 40)
 StopButton.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
 StopButton.BorderSizePixel = 0
 StopButton.Text = "STOP FLING"
 StopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 StopButton.Font = Enum.Font.SourceSansBold
-StopButton.TextSize = 18
+StopButton.TextSize = 16
 StopButton.Parent = MainFrame
 
+-- Fling All Toggle Button
+local FlingAllButton = Instance.new("TextButton")
+FlingAllButton.Position = UDim2.new(0, 10, 0, 240)
+FlingAllButton.Size = UDim2.new(1, -20, 0, 45)
+FlingAllButton.BackgroundColor3 = Color3.fromRGB(120, 0, 180)
+FlingAllButton.BorderSizePixel = 0
+FlingAllButton.Text = "FLING ALL: OFF"
+FlingAllButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+FlingAllButton.Font = Enum.Font.SourceSansBold
+FlingAllButton.TextSize = 18
+FlingAllButton.Parent = MainFrame
+
 -- Variables
-local SelectedTargets = {}
 local currentTarget = nil
 local FlingActive = false
+local FlingAllActive = false
 local isSelectingMode = false
+local clickConnection1
+local clickConnection2
 getgenv().OldPos = nil
 getgenv().FPDH = workspace.FallenPartsDestroyHeight
 
--- Update status display
-local function CountSelectedTargets()
-    local count = 0
-    for _ in pairs(SelectedTargets) do
-        count = count + 1
-    end
-    return count
-end
-
-local function UpdateStatus()
-    local count = CountSelectedTargets()
-    if FlingActive then
-        StatusLabel.Text = "Flinging target..."
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+local function UpdateStatus(statusText, color)
+    if not statusText then
+        if FlingAllActive then
+            StatusLabel.Text = "FLING ALL ACTIVE"
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        elseif currentTarget then
+            StatusLabel.Text = "1 target selected" 
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            StatusLabel.Text = "0 target(s) selected" 
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
     else
-        StatusLabel.Text = count .. " target(s) selected" 
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        StatusLabel.Text = statusText
+        StatusLabel.TextColor3 = color or Color3.fromRGB(255, 80, 80)
     end
 end
 
--- Assign and display the selected player safely
 local function SetSelectedPlayer(targetPlayer)
-    SelectedTargets = {} -- Resetea la lista previa para un solo objetivo
     if targetPlayer and targetPlayer ~= Player then
         currentTarget = targetPlayer
-        SelectedTargets[targetPlayer.Name] = targetPlayer
         SelectedLabel.Text = "Selected: " .. targetPlayer.DisplayName .. " (@" .. targetPlayer.Name .. ")"
     else
         currentTarget = nil
         SelectedLabel.Text = "Selected: None"
     end
-    UpdateStatus()
+    if not FlingActive and not FlingAllActive then UpdateStatus() end
 end
 
--- Auto-complete logic based on first letters typed
+-- Auto-complete logic
 SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     local text = SearchBox.Text
     if text == "" then
@@ -175,7 +184,6 @@ SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     local found = false
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= Player then
-            -- Evalúa si coincide el inicio del Username o DisplayName
             if string.sub(p.Name:lower(), 1, #text) == text:lower() or string.sub(p.DisplayName:lower(), 1, #text) == text:lower() then
                 SetSelectedPlayer(p)
                 found = true
@@ -183,20 +191,17 @@ SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
             end
         end
     end
-    if not found then
-        SetSelectedPlayer(nil)
-    end
+    if not found then SetSelectedPlayer(nil) end
 end)
 
 -- Click To Select World-Interaction Logic
-local clickConnection
 ClickSelectButton.MouseButton1Click:Connect(function()
     if isSelectingMode then return end
     isSelectingMode = true
     ClickSelectButton.Text = "SELECTING..."
     ClickSelectButton.BackgroundColor3 = Color3.fromRGB(200, 140, 0)
     
-    clickConnection = Mouse.Button1Down:Connect(function()
+    local function HandleClick()
         local target3D = Mouse.Target
         if target3D then
             local charModel = target3D:FindFirstAncestorOfClass("Model")
@@ -208,26 +213,18 @@ ClickSelectButton.MouseButton1Click:Connect(function()
                 end
             end
         end
-        -- Termina el modo selección tras un click
         isSelectingMode = false
         ClickSelectButton.Text = "CLICK TO SELECT"
         ClickSelectButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-        if clickConnection then
-            clickConnection:Disconnect()
-        end
-    end)
+        if clickConnection1 then clickConnection1:Disconnect() end
+        if clickConnection2 then clickConnection2:Disconnect() end
+    end
+
+    clickConnection1 = Mouse.Button1Down:Connect(HandleClick)
+    clickConnection2 = Mouse.Button2Down:Connect(HandleClick)
 end)
 
--- Show notification
-local function Message(Title, Text, Time)
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = Title,
-        Text = Text,
-        Duration = Time or 5
-    })
-end
-
--- The original Fling Functionality (Kept intact)
+-- Standard Fling Functionality
 local function SkidFling(TargetPlayer)
     local Character = Player.Character
     local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
@@ -244,7 +241,6 @@ local function SkidFling(TargetPlayer)
     
     if Character and Humanoid and RootPart then
         if RootPart.Velocity.Magnitude < 50 then getgenv().OldPos = RootPart.CFrame end
-        if THumanoid and THumanoid.Sit then return Message("Error", TargetPlayer.Name .. " is sitting", 2) end
         
         if THead then workspace.CurrentCamera.CameraSubject = THead
         elseif Handle then workspace.CurrentCamera.CameraSubject = Handle
@@ -252,33 +248,48 @@ local function SkidFling(TargetPlayer)
         
         if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
         
-        local FPos = function(BasePart, Pos, Ang)
-            RootPart.CFrame = CFrame.new(BasePart.Position) * Pos * Ang
-            Character:SetPrimaryPartCFrame(CFrame.new(BasePart.Position) * Pos * Ang)
+        local FPos = function(TargetCFrame)
+            RootPart.CFrame = TargetCFrame
+            if Character.PrimaryPart then
+                Character:SetPrimaryPartCFrame(TargetCFrame)
+            end
             RootPart.Velocity = Vector3.new(9e7, 9e7 * 10, 9e7)
             RootPart.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
         end
         
         local SFBasePart = function(BasePart)
-            local TimeToWait = 2
-            local Time = tick()
             local Angle = 0
+
             repeat
                 if RootPart and THumanoid then
-                    if BasePart.Velocity.Magnitude < 50 then
-                        Angle = Angle + 100
-                        FPos(BasePart, CFrame.new(0, 1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle),0 ,0))
-                        task.wait()
-                        FPos(BasePart, CFrame.new(0, -1.5, 0) + THumanoid.MoveDirection * BasePart.Velocity.Magnitude / 1.25, CFrame.Angles(math.rad(Angle), 0, 0))
-                        task.wait()
-                    else
-                        FPos(BasePart, CFrame.new(0, 1.5, THumanoid.WalkSpeed), CFrame.Angles(math.rad(90), 0, 0))
-                        task.wait()
-                        FPos(BasePart, CFrame.new(0, -1.5, -THumanoid.WalkSpeed), CFrame.Angles(0, 0, 0))
-                        task.wait()
-                    end
+                    local HasEquippedTool = TCharacter:FindFirstChildOfClass("Tool") ~= nil
+                    
+                    local predictFactor = HasEquippedTool and 0.40 or 0.25
+                    local radius = HasEquippedTool and 6.0 or 3.5
+                    local heightRange = HasEquippedTool and 5.0 or 3.0
+                    local speed = HasEquippedTool and 220 or 160
+                    
+                    Angle = Angle + speed
+                    local rad = math.rad(Angle)
+                    
+                    local TargetVel = BasePart.Velocity
+                    local PredictOffset = Vector3.new(
+                        TargetVel.X * predictFactor,
+                        TargetVel.Y * (HasEquippedTool and (predictFactor * 1.6) or (predictFactor * 1.2)),
+                        TargetVel.Z * predictFactor
+                    )
+                    
+                    local offsetX = math.cos(rad) * radius + math.sin(rad * 2) * (radius * 0.4)
+                    local offsetZ = math.sin(rad) * radius
+                    local offsetY = math.sin(rad * 1.5) * heightRange
+                    
+                    local DynamicOffset = CFrame.new(offsetX, offsetY, offsetZ)
+                    local BaseCFrame = CFrame.new(BasePart.Position + PredictOffset)
+                    
+                    FPos(BaseCFrame * DynamicOffset * CFrame.Angles(rad, rad * 0.7, rad * 1.3))
+                    task.wait()
                 end
-            until Time + TimeToWait < tick() or not FlingActive
+            until not FlingActive or not BasePart.Parent or BasePart.Velocity.Magnitude > 300
         end
         
         workspace.FallenPartsDestroyHeight = 0/0
@@ -291,7 +302,7 @@ local function SkidFling(TargetPlayer)
         if TRootPart then SFBasePart(TRootPart)
         elseif THead then SFBasePart(THead)
         elseif Handle then SFBasePart(Handle)
-        else return Message("Error", TargetPlayer.Name .. " has no valid parts", 2) end
+        else return end
         
         BV:Destroy()
         Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
@@ -300,7 +311,7 @@ local function SkidFling(TargetPlayer)
         if getgenv().OldPos then
             repeat
                 RootPart.CFrame = getgenv().OldPos * CFrame.new(0, .5, 0)
-                Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, .5, 0))
+                if Character.PrimaryPart then Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, .5, 0)) end
                 Humanoid:ChangeState("GettingUp")
                 for _, part in pairs(Character:GetChildren()) do
                     if part:IsA("BasePart") then part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new() end
@@ -309,35 +320,109 @@ local function SkidFling(TargetPlayer)
             until (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
             workspace.FallenPartsDestroyHeight = getgenv().FPDH
         end
-    else
-        return Message("Error", "Your character is not ready", 2)
     end
 end
 
--- Start Execution Block
+-- Ráfaga Ultra Agresiva de Amplio Rango para Fling All
+local function FastFlingPass(targetPlayer, duration)
+    local Character = Player.Character
+    local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+    local RootPart = Humanoid and Humanoid.RootPart
+    local TCharacter = targetPlayer.Character
+    if not TCharacter or not Character or not RootPart or not Humanoid then return end
+
+    local THumanoid = TCharacter:FindFirstChildOfClass("Humanoid")
+    local TRootPart = THumanoid and THumanoid.RootPart or TCharacter:FindFirstChild("HumanoidRootPart") or TCharacter:FindFirstChild("Head")
+    if not TRootPart then return end
+
+    workspace.CurrentCamera.CameraSubject = TRootPart
+    workspace.FallenPartsDestroyHeight = 0/0
+    
+    local BV = Instance.new("BodyVelocity")
+    BV.Parent = RootPart
+    BV.Velocity = Vector3.new(0, 0, 0)
+    BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+
+    local startTime = tick()
+    local Angle = 0
+    
+    -- Detección de Globo / Tool equipado
+    local HasEquippedTool = TCharacter:FindFirstChildOfClass("Tool") ~= nil
+    
+    -- Configuración ultra agresiva de amplio rango
+    local predictFactor = HasEquippedTool and 0.55 or 0.35
+    local radius = HasEquippedTool and 9.0 or 6.0
+    local heightRange = HasEquippedTool and 7.0 or 4.0
+    local speed = HasEquippedTool and 300 or 240
+
+    while FlingAllActive and (tick() - startTime < duration) and TRootPart and TRootPart.Parent do
+        -- Rompe inmediatamente si el objetivo fue lanzado
+        if TRootPart.Velocity.Magnitude > 200 then break end
+
+        Angle = Angle + speed
+        local rad = math.rad(Angle)
+        local TargetVel = TRootPart.Velocity
+        
+        local PredictOffset = Vector3.new(
+            TargetVel.X * predictFactor,
+            TargetVel.Y * (HasEquippedTool and (predictFactor * 1.8) or predictFactor),
+            TargetVel.Z * predictFactor
+        )
+        
+        local offsetX = math.cos(rad) * radius + math.sin(rad * 2) * (radius * 0.5)
+        local offsetZ = math.sin(rad) * radius
+        local offsetY = math.sin(rad * 1.5) * heightRange
+
+        RootPart.CFrame = CFrame.new(TRootPart.Position + PredictOffset + Vector3.new(offsetX, offsetY, offsetZ)) * CFrame.Angles(rad, rad * 0.8, rad * 1.4)
+        if Character.PrimaryPart then
+            Character:SetPrimaryPartCFrame(RootPart.CFrame)
+        end
+        RootPart.Velocity = Vector3.new(9e8, 9e8 * 10, 9e8)
+        RootPart.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        task.wait()
+    end
+
+    BV:Destroy()
+    Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+end
+
+-- Single Target Fling Controls
 local function StartFling()
-    if FlingActive then return end
+    if FlingActive or FlingAllActive then return end
     if not currentTarget then
-        StatusLabel.Text = "No target selected!"
+        UpdateStatus("No target selected!", Color3.fromRGB(200, 200, 50))
         task.wait(1)
         UpdateStatus()
         return
     end
     
     FlingActive = true
-    UpdateStatus()
-    Message("Started", "Flinging " .. currentTarget.Name, 2)
     
     task.spawn(function()
         while FlingActive do
             if currentTarget and currentTarget.Parent then
-                SkidFling(currentTarget)
+                local TChar = currentTarget.Character
+                local TRoot = TChar and TChar:FindFirstChild("HumanoidRootPart")
+                
+                if TRoot then
+                    if TRoot.Velocity.Magnitude > 300 then
+                        UpdateStatus("Target flung! Pausing...", Color3.fromRGB(255, 150, 0))
+                        task.wait(0.5)
+                    else
+                        UpdateStatus("Flinging target...", Color3.fromRGB(255, 80, 80))
+                        SkidFling(currentTarget)
+                    end
+                else
+                    UpdateStatus("Waiting for target to respawn...", Color3.fromRGB(255, 150, 0))
+                    task.wait(0.5)
+                end
             else
                 SetSelectedPlayer(nil)
                 SearchBox.Text = ""
                 break
             end
-            task.wait(0.5)
+            task.wait()
         end
     end)
 end
@@ -346,15 +431,94 @@ local function StopFling()
     if not FlingActive then return end
     FlingActive = false
     UpdateStatus()
-    Message("Stopped", "Fling has been stopped", 2)
+end
+
+-- Fling All Controls Logic
+local function StopFlingAll()
+    if not FlingAllActive then return end
+    FlingAllActive = false
+    FlingAllButton.Text = "FLING ALL: OFF"
+    FlingAllButton.BackgroundColor3 = Color3.fromRGB(120, 0, 180)
+    UpdateStatus()
+end
+
+local function StartFlingAll()
+    if FlingAllActive then return end
+    if FlingActive then StopFling() end
+    
+    FlingAllActive = true
+    FlingAllButton.Text = "FLING ALL: ON"
+    FlingAllButton.BackgroundColor3 = Color3.fromRGB(220, 50, 0)
+    UpdateStatus("Flinging ALL Players...", Color3.fromRGB(255, 100, 100))
+
+    task.spawn(function()
+        local Character = Player.Character
+        local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+        local RootPart = Humanoid and Humanoid.RootPart
+
+        if RootPart and RootPart.Velocity.Magnitude < 50 then
+            getgenv().OldPos = RootPart.CFrame
+        end
+
+        while FlingAllActive do
+            local playerList = Players:GetPlayers()
+            local targetedAny = false
+
+            for _, target in ipairs(playerList) do
+                if not FlingAllActive then break end
+                
+                if target ~= Player and target.Character then
+                    local TChar = target.Character
+                    local THumanoid = TChar:FindFirstChildOfClass("Humanoid")
+                    local TRoot = TChar:FindFirstChild("HumanoidRootPart") or TChar:FindFirstChild("Head")
+
+                    -- FILTRO: Solo ataca si esta vivo y NO esta volando/flingeado (velocidad menor a 150)
+                    if THumanoid and THumanoid.Health > 0 and TRoot and TRoot.Velocity.Magnitude < 150 then
+                        targetedAny = true
+                        FastFlingPass(target, 0.1) -- 0.1s de ataque continuo
+                    end
+                end
+            end
+
+            if not targetedAny then
+                task.wait(0.1)
+            end
+        end
+
+        -- Reseteo al apagar
+        if Humanoid then workspace.CurrentCamera.CameraSubject = Humanoid end
+        if getgenv().OldPos and RootPart then
+            repeat
+                RootPart.CFrame = getgenv().OldPos * CFrame.new(0, 0.5, 0)
+                if Character.PrimaryPart then Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, 0.5, 0)) end
+                if Humanoid then Humanoid:ChangeState("GettingUp") end
+                for _, part in pairs(Character:GetChildren()) do
+                    if part:IsA("BasePart") then part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new() end
+                end
+                task.wait()
+            until not RootPart or (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
+            workspace.FallenPartsDestroyHeight = getgenv().FPDH
+        end
+    end)
 end
 
 -- Hook Connections
 StartButton.MouseButton1Click:Connect(StartFling)
 StopButton.MouseButton1Click:Connect(StopFling)
+
+FlingAllButton.MouseButton1Click:Connect(function()
+    if FlingAllActive then
+        StopFlingAll()
+    else
+        StartFlingAll()
+    end
+end)
+
 CloseButton.MouseButton1Click:Connect(function()
     StopFling()
-    if clickConnection then clickConnection:Disconnect() end
+    StopFlingAll()
+    if clickConnection1 then clickConnection1:Disconnect() end
+    if clickConnection2 then clickConnection2:Disconnect() end
     ScreenGui:Destroy()
 end)
 
@@ -367,4 +531,3 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 UpdateStatus()
-Message("Loaded", "3xmane's Custom Target Fling GUI loaded!", 3)
