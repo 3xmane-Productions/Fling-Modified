@@ -88,6 +88,10 @@ local currentEffect = nil
 local effectConnection = nil
 local selectedPlayer = nil
 
+local blackHoleHolding = false
+local tornadoHolding = false
+local clickTpMode = false
+
 ----------------------------------------------------
 -- GUI
 ----------------------------------------------------
@@ -245,14 +249,19 @@ local playerRemovingConn = Players.PlayerRemoving:Connect(function(plr)
 end)
 
 ----------------------------------------------------
--- HOLDER
+-- HOLDER (SCROLLING FRAME PARA SOPORTAR MÁS BOTONES)
 ----------------------------------------------------
 
-local Holder = Instance.new("Frame")
+local Holder = Instance.new("ScrollingFrame")
 Holder.Parent = Main
 Holder.Size = UDim2.new(1, -20, 1, -145)
 Holder.Position = UDim2.new(0, 10, 0, 135)
 Holder.BackgroundTransparency = 1
+Holder.BorderSizePixel = 0
+Holder.ScrollBarThickness = 4
+Holder.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 80)
+Holder.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Holder.CanvasSize = UDim2.new(0, 0, 0, 0)
 
 local Grid = Instance.new("UIGridLayout")
 Grid.Parent = Holder
@@ -287,16 +296,30 @@ local function createButton(text, color)
 end
 
 ----------------------------------------------------
--- EFFECT SYSTEM
+-- EFFECT SYSTEM (DESACTIVACIÓN Y LIMPIEZA COMPLETA)
 ----------------------------------------------------
 
 local function stopEffect()
 	currentEffect = nil
 	Status.Text = "Effect: None"
 
+	blackHoleHolding = false
+	tornadoHolding = false
+	clickTpMode = false
+
 	if effectConnection then
 		effectConnection:Disconnect()
 		effectConnection = nil
+	end
+
+	-- Limpieza de inercia al cambiar o detener cualquier efecto
+	for part in pairs(Network.BaseParts) do
+		if part and part.Parent and not part.Anchored then
+			pcall(function()
+				part.AssemblyLinearVelocity = Vector3.zero
+				part.AssemblyAngularVelocity = Vector3.zero
+			end)
+		end
 	end
 end
 
@@ -423,50 +446,40 @@ createButton("Orbit", Color3.fromRGB(0, 220, 170)).MouseButton1Click:Connect(fun
 end)
 
 ----------------------------------------------------
--- CUBE (GIGANTE Y AMPLIAMENTE ESPACIADO)
+-- SPHERE (Gigante y Rotación Fluida)
 ----------------------------------------------------
 
-createButton("Cube", Color3.fromRGB(150, 80, 255)).MouseButton1Click:Connect(function()
-	startEffect("Cube", function()
+local sphereTick = 0
+
+createButton("Sphere", Color3.fromRGB(150, 80, 255)).MouseButton1Click:Connect(function()
+	startEffect("Sphere", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
 
+		sphereTick += 0.015
 		local parts = getParts()
 		local total = #parts
 		if total == 0 then return end
 
-		local size = 55
-		local partsPerFace = math.max(1, math.floor(total / 6))
-		local sideCount = math.max(1, math.ceil(math.sqrt(partsPerFace)))
+		local radius = 180
+		local phi = math.pi * (3 - math.sqrt(5))
 
 		for i, part in ipairs(parts) do
-			local faceIndex = math.min(6, math.floor((i - 1) / partsPerFace) + 1)
-			local localIdx = (i - 1) % partsPerFace
+			local y = 1 - (i / total) * 2
+			local r = math.sqrt(1 - y * y) * radius
+			local theta = phi * i + (sphereTick * 2.5)
 
-			local u = ((localIdx % sideCount) / math.max(1, sideCount - 1)) - 0.5
-			local v = ((math.floor(localIdx / sideCount) / math.max(1, sideCount - 1))) - 0.5
-			u = u * (size * 2.8)
-			v = v * (size * 2.8)
-
-			local localPos = Vector3.zero
-			if faceIndex == 1 then localPos = Vector3.new(u, v, size)
-			elseif faceIndex == 2 then localPos = Vector3.new(u, v, -size)
-			elseif faceIndex == 3 then localPos = Vector3.new(-size, u, v)
-			elseif faceIndex == 4 then localPos = Vector3.new(size, u, v)
-			elseif faceIndex == 5 then localPos = Vector3.new(u, size, v)
-			elseif faceIndex == 6 then localPos = Vector3.new(u, -size, v)
-			end
-
+			local localPos = Vector3.new(math.cos(theta) * r, y * radius, math.sin(theta) * r)
 			local targetPos = targetHRP.Position + localPos
 
-			part.AssemblyLinearVelocity = (targetPos - part.Position) * 12
-			part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+			part.AssemblyLinearVelocity = (targetPos - part.Position) * 18
+			part.AssemblyAngularVelocity = Vector3.new(12, 12, 12)
 		end
 	end)
 end)
 
 ----------------------------------------------------
--- WINGS (ESTRICTAMENTE ATRÁS, GRAN SEPARACIÓN Y ALETAZO FLUIDO)
+-- WINGS (Aleteo Extenso, Pausado y Partes Separadas)
 ----------------------------------------------------
 
 local wingTick = 0
@@ -476,7 +489,7 @@ createButton("Wings", Color3.fromRGB(0, 180, 255)).MouseButton1Click:Connect(fun
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
 
-		wingTick += 0.05
+		wingTick += 0.035 -- Aleteo pausado/elegante
 		local parts = getParts()
 		local total = #parts
 		if total == 0 then return end
@@ -490,14 +503,14 @@ createButton("Wings", Color3.fromRGB(0, 180, 255)).MouseButton1Click:Connect(fun
 
 			local sideMultiplier = isRight and 1 or -1
 			
-			-- Movimiento de aleteo dinámico y elegante
-			local wingFlapY = math.sin(wingTick + (ratio * math.pi * 1.5)) * (14 * ratio)
-			local wingFlapZ = math.cos(wingTick + (ratio * math.pi)) * (6 * ratio)
+			-- Movimiento de aleteo mucho más extenso
+			local wingFlapY = math.sin(wingTick + (ratio * math.pi * 1.2)) * (60 * ratio)
+			local wingFlapZ = math.cos(wingTick + (ratio * math.pi)) * (30 * ratio)
 
-			-- Gran separación lateral, altura y posicionadas DETRÁS (+Z)
-			local spanWidth = 10 + (ratio * 55)
-			local spanHeight = 3 + (ratio * 32) + wingFlapY
-			local depthZ = 14 + (ratio * 20) + wingFlapZ
+			-- Separación masiva entre partes
+			local spanWidth = 20 + (ratio * 110)
+			local spanHeight = 5 + (ratio * 60) + wingFlapY
+			local depthZ = 35 + (ratio * 40) + wingFlapZ
 
 			local offsetX = spanWidth * sideMultiplier
 			local offsetY = spanHeight
@@ -506,7 +519,7 @@ createButton("Wings", Color3.fromRGB(0, 180, 255)).MouseButton1Click:Connect(fun
 			local targetCFrame = targetHRP.CFrame * CFrame.new(offsetX, offsetY, offsetZ)
 			local targetPos = targetCFrame.Position
 
-			part.AssemblyLinearVelocity = (targetPos - part.Position) * 15
+			part.AssemblyLinearVelocity = (targetPos - part.Position) * 16
 			part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 		end
 	end)
@@ -539,116 +552,54 @@ createButton("Elevator", Color3.fromRGB(255, 255, 80)).MouseButton1Click:Connect
 end)
 
 ----------------------------------------------------
--- CLICK TP
+-- TORNADO (Hold Click - Cono Gigante)
 ----------------------------------------------------
 
-local clickTpMode = false
+local tornadoTick = 0
+
+local TornadoButton = createButton("Tornado", Color3.fromRGB(140, 100, 255))
+
+TornadoButton.MouseButton1Click:Connect(function()
+	stopEffect()
+	tornadoHolding = true
+	Status.Text = "Effect: Hold Click For Tornado"
+end)
+
+----------------------------------------------------
+-- CLICK TP
+----------------------------------------------------
 
 local ClickTPButton = createButton("Click Tp", Color3.fromRGB(255, 80, 180))
 
 ClickTPButton.MouseButton1Click:Connect(function()
+	stopEffect()
 	clickTpMode = true
 	Status.Text = "Effect: Click To TP"
 end)
 
-mouse.Button1Down:Connect(function()
-	if not clickTpMode then return end
-	clickTpMode = false
-
-	local targetPosition = getMouseTarget()
-
-	for _, part in ipairs(getParts()) do
-		if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-			continue
-		end
-
-		local model = part:FindFirstAncestorOfClass("Model")
-		if model and model:FindFirstChildOfClass("Humanoid") then continue end
-		if part.AssemblyMass > 10000 then continue end
-
-		pcall(function()
-			part.AssemblyLinearVelocity = Vector3.zero
-			part.AssemblyAngularVelocity = Vector3.zero
-			part.CFrame = CFrame.new(
-				targetPosition + Vector3.new(
-					math.random(-4, 4),
-					math.random(-4, 4),
-					math.random(-4, 4)
-				)
-			)
-		end)
-	end
-
-	Status.Text = "Effect: None"
-end)
-
 ----------------------------------------------------
--- BLACK HOLE
+-- BLACK HOLE (Hold Click)
 ----------------------------------------------------
-
-local blackHoleHolding = false
 
 local BlackHoleButton = createButton("Black Hole", Color3.fromRGB(20, 20, 20))
 
 BlackHoleButton.MouseButton1Click:Connect(function()
+	stopEffect()
 	blackHoleHolding = true
 	Status.Text = "Effect: Hold Click For Black Hole"
 end)
 
+----------------------------------------------------
+-- MOUSE EVENT LISTENERS (CLICK TP, BLACK HOLE, TORNADO)
+----------------------------------------------------
+
+local bhTick = 0
+
 mouse.Button1Down:Connect(function()
-	if not blackHoleHolding then return end
-
-	startEffect("Black Hole", function()
-		local bhPos = getMouseTarget()
-		local t = tick() * 15
-
-		for _, part in ipairs(getParts()) do
-			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-				continue
-			end
-
-			local model = part:FindFirstAncestorOfClass("Model")
-			if model and model:FindFirstChildOfClass("Humanoid") then continue end
-			if part.AssemblyMass > 10000 then continue end
-
-			local diff = bhPos - part.Position
-			local dist = diff.Magnitude
-
-			if dist > 2.0 then
-				local pullForce = diff * 30
-				local angleX = math.cos(t + part.Position.X) * 80
-				local angleZ = math.sin(t + part.Position.Z) * 80
-				local spiral = Vector3.new(angleX, math.sin(t) * 50, angleZ)
-
-				part.AssemblyLinearVelocity = pullForce + spiral
-			else
-				part.AssemblyLinearVelocity = Vector3.new(
-					math.random(-15, 15),
-					math.random(-15, 15),
-					math.random(-15, 15)
-				)
-			end
-
-			part.AssemblyAngularVelocity = Vector3.new(15, 45, 15)
-		end
-	end)
-end)
-
-mouse.Button1Up:Connect(function()
-	if currentEffect == "Black Hole" then
-		stopEffect()
-		blackHoleHolding = false
-	end
-end)
-
-----------------------------------------------------
--- AGGRESSIVE BRING
-----------------------------------------------------
-
-createButton("Aggressive Bring", Color3.fromRGB(255, 70, 70)).MouseButton1Click:Connect(function()
-	startEffect("Aggressive Bring", function()
-		local targetHRP = getTargetHRP()
-		if not targetHRP then return end
+	-- Mode: Click TP
+	if clickTpMode then
+		clickTpMode = false
+		local targetPosition = getMouseTarget()
 
 		for _, part in ipairs(getParts()) do
 			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
@@ -661,11 +612,155 @@ createButton("Aggressive Bring", Color3.fromRGB(255, 70, 70)).MouseButton1Click:
 
 			pcall(function()
 				part.AssemblyLinearVelocity = Vector3.zero
-				part.AssemblyAngularVelocity = Vector3.new(35, 35, 35)
-				part.CFrame = targetHRP.CFrame * CFrame.new(
-					math.random(-6, 6),
-					math.random(-4, 4),
-					math.random(-6, 6)
+				part.AssemblyAngularVelocity = Vector3.zero
+				part.CFrame = CFrame.new(
+					targetPosition + Vector3.new(
+						math.random(-4, 4),
+						math.random(-4, 4),
+						math.random(-4, 4)
+					)
+				)
+			end)
+		end
+
+		Status.Text = "Effect: None"
+		return
+	end
+
+	-- Mode: Black Hole (TP Ultra Agresivo y Centro Ultra Denso)
+	if blackHoleHolding then
+		startEffect("Black Hole", function()
+			local bhPos = getMouseTarget()
+			bhTick += 0.2 
+			local parts = getParts()
+
+			for i, part in ipairs(parts) do
+				if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
+					continue
+				end
+
+				local model = part:FindFirstAncestorOfClass("Model")
+				if model and model:FindFirstChildOfClass("Humanoid") then continue end
+				if part.AssemblyMass > 10000 then continue end
+
+				pcall(function()
+					local diff = bhPos - part.Position
+					local dist = diff.Magnitude
+
+					if dist > 12 then
+						-- Avance directo tipo Teleport rápido al centro
+						part.CFrame = CFrame.new(part.Position:Lerp(bhPos, 0.45))
+						part.AssemblyLinearVelocity = diff.Unit * 450 + Vector3.new(math.random(-30, 30), math.random(-30, 30), math.random(-30, 30))
+					else
+						-- Centro ultra compacto, sin dispersión
+						local angle = bhTick + (i * 0.15)
+						local radius = math.clamp(dist, 0.5, 3.5)
+						local orbitOffset = Vector3.new(
+							math.cos(angle) * radius,
+							math.sin(bhTick * 2 + i) * 1.5,
+							math.sin(angle) * radius
+						)
+						local targetPos = bhPos + orbitOffset
+						
+						part.CFrame = CFrame.new(part.Position:Lerp(targetPos, 0.6))
+						part.AssemblyLinearVelocity = (targetPos - part.Position) * 50
+					end
+
+					part.AssemblyAngularVelocity = Vector3.new(400, 500, 400)
+				end)
+			end
+		end)
+		return
+	end
+
+	-- Mode: Tornado
+	if tornadoHolding then
+		startEffect("Tornado", function()
+			local mousePos = getMouseTarget()
+			if not mousePos then return end
+
+			tornadoTick += 0.18
+			local parts = getParts()
+			local total = #parts
+			if total == 0 then return end
+
+			local maxHeight = 140
+			local baseRadius = 12
+			local topRadius = 95
+
+			for i, part in ipairs(parts) do
+				if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
+					continue
+				end
+
+				local model = part:FindFirstAncestorOfClass("Model")
+				if model and model:FindFirstChildOfClass("Humanoid") then continue end
+				if part.AssemblyMass > 10000 then continue end
+
+				pcall(function()
+					local progress = (i / total)
+					local currentHeight = progress * maxHeight
+					local currentRadius = baseRadius + (progress * (topRadius - baseRadius))
+
+					local angle = tornadoTick * 4 + (progress * math.pi * 4) + (i * 0.1)
+					
+					local offset = Vector3.new(
+						math.cos(angle) * currentRadius,
+						currentHeight - 20,
+						math.sin(angle) * currentRadius
+					)
+
+					local targetPos = mousePos + offset
+
+					part.AssemblyLinearVelocity = (targetPos - part.Position) * 40
+					part.AssemblyAngularVelocity = Vector3.new(0, 320, 0)
+				end)
+			end
+		end)
+		return
+	end
+end)
+
+mouse.Button1Up:Connect(function()
+	if currentEffect == "Black Hole" or currentEffect == "Tornado" then
+		stopEffect()
+	end
+end)
+
+----------------------------------------------------
+-- AGGRESSIVE BRING (Área expandida, TP predictivo)
+----------------------------------------------------
+
+createButton("Aggressive Bring", Color3.fromRGB(255, 70, 70)).MouseButton1Click:Connect(function()
+	startEffect("Aggressive Bring", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+
+		local predictedPos = targetHRP.Position + (targetHRP.AssemblyLinearVelocity * 0.12)
+
+		for _, part in ipairs(getParts()) do
+			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
+				continue
+			end
+
+			local model = part:FindFirstAncestorOfClass("Model")
+			if model and model:FindFirstChildOfClass("Humanoid") then continue end
+			if part.AssemblyMass > 10000 then continue end
+
+			pcall(function()
+				local offset = Vector3.new(
+					math.random(-35, 35),
+					math.random(-10, 20),
+					math.random(-35, 35)
+				)
+				local targetPos = predictedPos + offset
+
+				part.CFrame = CFrame.new(targetPos)
+				part.AssemblyLinearVelocity = (targetHRP.Position - part.Position) * 80 + Vector3.new(0, -20, 0)
+				part.AssemblyAngularVelocity = Vector3.new(
+					math.random(-300, 300),
+					math.random(-300, 300),
+					math.random(-300, 300)
 				)
 			end)
 		end
@@ -673,7 +768,7 @@ createButton("Aggressive Bring", Color3.fromRGB(255, 70, 70)).MouseButton1Click:
 end)
 
 ----------------------------------------------------
--- TARGET ALL
+-- TARGET ALL (Pausa 0.5s, Área masiva y agresividad)
 ----------------------------------------------------
 
 local targetAllTick = 0
@@ -700,13 +795,15 @@ createButton("Target All", Color3.fromRGB(200, 30, 80)).MouseButton1Click:Connec
 
 		if #validTargets == 0 then return end
 
-		if now - targetAllTick >= 0.3 then
+		if now - targetAllTick >= 0.5 then
 			targetAllTick = now
 			currentTargetIndex = (currentTargetIndex % #validTargets) + 1
 		end
 
 		local currentTargetHRP = validTargets[currentTargetIndex] or validTargets[1]
 		if not currentTargetHRP then return end
+
+		local predictedPos = currentTargetHRP.Position + (currentTargetHRP.AssemblyLinearVelocity * 0.12)
 
 		for _, part in ipairs(getParts()) do
 			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
@@ -719,15 +816,19 @@ createButton("Target All", Color3.fromRGB(200, 30, 80)).MouseButton1Click:Connec
 
 			pcall(function()
 				local offset = Vector3.new(
-					math.random(-5, 5),
-					math.random(-2, 4),
-					math.random(-5, 5)
+					math.random(-35, 35),
+					math.random(-10, 20),
+					math.random(-35, 35)
 				)
-				local targetPos = currentTargetHRP.Position + offset
+				local targetPos = predictedPos + offset
 
 				part.CFrame = CFrame.new(targetPos)
-				part.AssemblyLinearVelocity = (targetPos - part.Position) * 120
-				part.AssemblyAngularVelocity = Vector3.new(350, 350, 350)
+				part.AssemblyLinearVelocity = (currentTargetHRP.Position - part.Position) * 90
+				part.AssemblyAngularVelocity = Vector3.new(
+					math.random(-350, 350),
+					math.random(-350, 350),
+					math.random(-350, 350)
+				)
 			end)
 		end
 	end)
