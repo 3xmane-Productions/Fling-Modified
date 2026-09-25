@@ -134,6 +134,28 @@ FlingAllButton.Font = Enum.Font.SourceSansBold
 FlingAllButton.TextSize = 18
 FlingAllButton.Parent = MainFrame
 
+-- Visual Effects Setup
+local SelectionHighlight = Instance.new("Highlight")
+SelectionHighlight.FillColor = Color3.fromRGB(255, 255, 0)
+SelectionHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+SelectionHighlight.FillTransparency = 0.5
+SelectionHighlight.OutlineTransparency = 0.2
+
+local SelectionBillboard = Instance.new("BillboardGui")
+SelectionBillboard.Size = UDim2.new(0, 200, 0, 50)
+SelectionBillboard.StudsOffset = Vector3.new(0, 3, 0)
+SelectionBillboard.AlwaysOnTop = true
+
+local SelectionName = Instance.new("TextLabel")
+SelectionName.Size = UDim2.new(1, 0, 1, 0)
+SelectionName.BackgroundTransparency = 1
+SelectionName.TextColor3 = Color3.fromRGB(255, 255, 255)
+SelectionName.TextStrokeTransparency = 0.5
+SelectionName.Font = Enum.Font.SourceSansBold
+SelectionName.TextScaled = false
+SelectionName.TextSize = 16
+SelectionName.Parent = SelectionBillboard
+
 -- Variables
 local currentTarget = nil
 local FlingActive = false
@@ -141,6 +163,7 @@ local FlingAllActive = false
 local isSelectingMode = false
 local clickConnection1
 local clickConnection2
+local hoverConnection
 getgenv().OldPos = nil
 getgenv().FPDH = workspace.FallenPartsDestroyHeight
 
@@ -173,7 +196,27 @@ local function SetSelectedPlayer(targetPlayer)
     if not FlingActive and not FlingAllActive then UpdateStatus() end
 end
 
--- Auto-complete logic
+local function GetPlayerFromMouse()
+    local ray = workspace.CurrentCamera:ScreenPointToRay(Mouse.X, Mouse.Y)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Include
+    
+    local characterParts = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= Player and p.Character then
+            table.insert(characterParts, p.Character)
+        end
+    end
+    params.FilterDescendantsInstances = characterParts
+    
+    local result = workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
+    if result and result.Instance then
+        local charModel = result.Instance:FindFirstAncestorOfClass("Model")
+        if charModel then return Players:GetPlayerFromCharacter(charModel) end
+    end
+    return nil
+end
+
 SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     local text = SearchBox.Text
     if text == "" then
@@ -194,37 +237,46 @@ SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     if not found then SetSelectedPlayer(nil) end
 end)
 
--- Click To Select World-Interaction Logic
 ClickSelectButton.MouseButton1Click:Connect(function()
     if isSelectingMode then return end
     isSelectingMode = true
     ClickSelectButton.Text = "SELECTING..."
     ClickSelectButton.BackgroundColor3 = Color3.fromRGB(200, 140, 0)
     
-    local function HandleClick()
-        local target3D = Mouse.Target
-        if target3D then
-            local charModel = target3D:FindFirstAncestorOfClass("Model")
-            if charModel then
-                local clickedPlayer = Players:GetPlayerFromCharacter(charModel)
-                if clickedPlayer and clickedPlayer ~= Player then
-                    SetSelectedPlayer(clickedPlayer)
-                    SearchBox.Text = clickedPlayer.Name
-                end
-            end
+    hoverConnection = RunService.RenderStepped:Connect(function()
+        local hoveredPlayer = GetPlayerFromMouse()
+        if hoveredPlayer and hoveredPlayer.Character then
+            SelectionHighlight.Parent = hoveredPlayer.Character
+            SelectionBillboard.Parent = hoveredPlayer.Character:FindFirstChild("Head") or hoveredPlayer.Character:FindFirstChild("HumanoidRootPart")
+            SelectionName.Text = hoveredPlayer.DisplayName .. "\n(@" .. hoveredPlayer.Name .. ")"
+        else
+            SelectionHighlight.Parent = nil
+            SelectionBillboard.Parent = nil
         end
-        isSelectingMode = false
-        ClickSelectButton.Text = "CLICK TO SELECT"
-        ClickSelectButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-        if clickConnection1 then clickConnection1:Disconnect() end
-        if clickConnection2 then clickConnection2:Disconnect() end
+    end)
+    
+    local function HandleClick()
+        local clickedPlayer = GetPlayerFromMouse()
+        if clickedPlayer and clickedPlayer ~= Player then
+            SetSelectedPlayer(clickedPlayer)
+            SearchBox.Text = clickedPlayer.Name
+            
+            isSelectingMode = false
+            ClickSelectButton.Text = "CLICK TO SELECT"
+            ClickSelectButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+            
+            if clickConnection1 then clickConnection1:Disconnect() end
+            if clickConnection2 then clickConnection2:Disconnect() end
+            if hoverConnection then hoverConnection:Disconnect() end
+            SelectionHighlight.Parent = nil
+            SelectionBillboard.Parent = nil
+        end
     end
 
     clickConnection1 = Mouse.Button1Down:Connect(HandleClick)
     clickConnection2 = Mouse.Button2Down:Connect(HandleClick)
 end)
 
--- Standard Fling Functionality
 local function SkidFling(TargetPlayer)
     local Character = Player.Character
     local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
@@ -259,34 +311,34 @@ local function SkidFling(TargetPlayer)
         
         local SFBasePart = function(BasePart)
             local Angle = 0
-
             repeat
                 if RootPart and THumanoid then
                     local HasEquippedTool = TCharacter:FindFirstChildOfClass("Tool") ~= nil
-                    
-                    local predictFactor = HasEquippedTool and 0.40 or 0.25
-                    local radius = HasEquippedTool and 6.0 or 3.5
-                    local heightRange = HasEquippedTool and 5.0 or 3.0
-                    local speed = HasEquippedTool and 220 or 160
-                    
-                    Angle = Angle + speed
+                    Angle = Angle + (HasEquippedTool and 650 or 500)
                     local rad = math.rad(Angle)
-                    
+
                     local TargetVel = BasePart.Velocity
-                    local PredictOffset = Vector3.new(
-                        TargetVel.X * predictFactor,
-                        TargetVel.Y * (HasEquippedTool and (predictFactor * 1.6) or (predictFactor * 1.2)),
-                        TargetVel.Z * predictFactor
-                    )
-                    
-                    local offsetX = math.cos(rad) * radius + math.sin(rad * 2) * (radius * 0.4)
-                    local offsetZ = math.sin(rad) * radius
-                    local offsetY = math.sin(rad * 1.5) * heightRange
-                    
-                    local DynamicOffset = CFrame.new(offsetX, offsetY, offsetZ)
-                    local BaseCFrame = CFrame.new(BasePart.Position + PredictOffset)
-                    
-                    FPos(BaseCFrame * DynamicOffset * CFrame.Angles(rad, rad * 0.7, rad * 1.3))
+                    local IsStationary = TargetVel.Magnitude < 2.5
+
+                    -- Distancias reducidas y ajustadas para impacto instantáneo
+                    local predictFactor = HasEquippedTool and 0.6 or 0.35
+                    local frontDist = HasEquippedTool and 5.0 or 3.5
+                    local sideDist = HasEquippedTool and 0.8 or 0.4
+                    local heightDist = HasEquippedTool and 2.0 or 1.0
+
+                    local moveDir = IsStationary and BasePart.CFrame.LookVector or TargetVel.Unit
+                    local sideDir = Vector3.new(-moveDir.Z, 0, moveDir.X)
+                    if sideDir.Magnitude > 0.01 then sideDir = sideDir.Unit else sideDir = Vector3.new(1,0,0) end
+
+                    -- Sin fluidez: Oscilaciones agresivas cortas que atraviesan el centro
+                    local frontSweep = math.sin(rad * 2) * frontDist
+                    local sideSweep = math.cos(rad * 3) * sideDist
+                    local heightSweep = math.sin(rad * 1.5) * heightDist
+
+                    local predictPos = IsStationary and BasePart.Position or (BasePart.Position + TargetVel * predictFactor)
+                    local finalPos = predictPos + (moveDir * frontSweep) + (sideDir * sideSweep) + Vector3.new(0, heightSweep, 0)
+
+                    FPos(CFrame.new(finalPos) * CFrame.Angles(rad, rad * 2, rad * 1.5))
                     task.wait()
                 end
             until not FlingActive or not BasePart.Parent or BasePart.Velocity.Magnitude > 300
@@ -323,7 +375,6 @@ local function SkidFling(TargetPlayer)
     end
 end
 
--- Ráfaga Ultra Agresiva de Amplio Rango para Fling All
 local function FastFlingPass(targetPlayer, duration)
     local Character = Player.Character
     local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
@@ -346,40 +397,40 @@ local function FastFlingPass(targetPlayer, duration)
 
     local startTime = tick()
     local Angle = 0
-    
-    -- Detección de Globo / Tool equipado
     local HasEquippedTool = TCharacter:FindFirstChildOfClass("Tool") ~= nil
-    
-    -- Configuración ultra agresiva de amplio rango
-    local predictFactor = HasEquippedTool and 0.55 or 0.35
-    local radius = HasEquippedTool and 9.0 or 6.0
-    local heightRange = HasEquippedTool and 7.0 or 4.0
-    local speed = HasEquippedTool and 300 or 240
 
     while FlingAllActive and (tick() - startTime < duration) and TRootPart and TRootPart.Parent do
-        -- Rompe inmediatamente si el objetivo fue lanzado
         if TRootPart.Velocity.Magnitude > 200 then break end
 
-        Angle = Angle + speed
+        Angle = Angle + (HasEquippedTool and 700 or 550)
         local rad = math.rad(Angle)
         local TargetVel = TRootPart.Velocity
-        
-        local PredictOffset = Vector3.new(
-            TargetVel.X * predictFactor,
-            TargetVel.Y * (HasEquippedTool and (predictFactor * 1.8) or predictFactor),
-            TargetVel.Z * predictFactor
-        )
-        
-        local offsetX = math.cos(rad) * radius + math.sin(rad * 2) * (radius * 0.5)
-        local offsetZ = math.sin(rad) * radius
-        local offsetY = math.sin(rad * 1.5) * heightRange
+        local IsStationary = TargetVel.Magnitude < 2.5
 
-        RootPart.CFrame = CFrame.new(TRootPart.Position + PredictOffset + Vector3.new(offsetX, offsetY, offsetZ)) * CFrame.Angles(rad, rad * 0.8, rad * 1.4)
+        local predictFactor = HasEquippedTool and 0.6 or 0.35
+        local frontDist = HasEquippedTool and 5.0 or 3.5
+        local sideDist = HasEquippedTool and 0.8 or 0.4
+        local heightDist = HasEquippedTool and 2.0 or 1.0
+
+        local moveDir = IsStationary and TRootPart.CFrame.LookVector or TargetVel.Unit
+        local sideDir = Vector3.new(-moveDir.Z, 0, moveDir.X)
+        if sideDir.Magnitude > 0.01 then sideDir = sideDir.Unit else sideDir = Vector3.new(1,0,0) end
+
+        local frontSweep = math.sin(rad * 2) * frontDist
+        local sideSweep = math.cos(rad * 3) * sideDist
+        local heightSweep = math.sin(rad * 1.5) * heightDist
+
+        local predictPos = IsStationary and TRootPart.Position or (TRootPart.Position + TargetVel * predictFactor)
+        local finalPos = predictPos + (moveDir * frontSweep) + (sideDir * sideSweep) + Vector3.new(0, heightSweep, 0)
+
+        RootPart.CFrame = CFrame.new(finalPos) * CFrame.Angles(rad, rad * 2, rad * 1.5)
+        
         if Character.PrimaryPart then
             Character:SetPrimaryPartCFrame(RootPart.CFrame)
         end
         RootPart.Velocity = Vector3.new(9e8, 9e8 * 10, 9e8)
         RootPart.RotVelocity = Vector3.new(9e8, 9e8, 9e8)
+        
         task.wait()
     end
 
@@ -387,7 +438,6 @@ local function FastFlingPass(targetPlayer, duration)
     Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
 end
 
--- Single Target Fling Controls
 local function StartFling()
     if FlingActive or FlingAllActive then return end
     if not currentTarget then
@@ -398,7 +448,6 @@ local function StartFling()
     end
     
     FlingActive = true
-    
     task.spawn(function()
         while FlingActive do
             if currentTarget and currentTarget.Parent then
@@ -433,7 +482,6 @@ local function StopFling()
     UpdateStatus()
 end
 
--- Fling All Controls Logic
 local function StopFlingAll()
     if not FlingAllActive then return end
     FlingAllActive = false
@@ -472,10 +520,13 @@ local function StartFlingAll()
                     local THumanoid = TChar:FindFirstChildOfClass("Humanoid")
                     local TRoot = TChar:FindFirstChild("HumanoidRootPart") or TChar:FindFirstChild("Head")
 
-                    -- FILTRO: Solo ataca si esta vivo y NO esta volando/flingeado (velocidad menor a 150)
                     if THumanoid and THumanoid.Health > 0 and TRoot and TRoot.Velocity.Magnitude < 150 then
                         targetedAny = true
-                        FastFlingPass(target, 0.1) -- 0.1s de ataque continuo
+                        FastFlingPass(target, 0.1) -- Pase ultra rápido a 0.1s
+                        
+                        if FlingAllActive then
+                            task.wait(0.1) -- Pausa rápida de 0.1s entre objetivos
+                        end
                     end
                 end
             end
@@ -485,7 +536,6 @@ local function StartFlingAll()
             end
         end
 
-        -- Reseteo al apagar
         if Humanoid then workspace.CurrentCamera.CameraSubject = Humanoid end
         if getgenv().OldPos and RootPart then
             repeat
@@ -507,11 +557,7 @@ StartButton.MouseButton1Click:Connect(StartFling)
 StopButton.MouseButton1Click:Connect(StopFling)
 
 FlingAllButton.MouseButton1Click:Connect(function()
-    if FlingAllActive then
-        StopFlingAll()
-    else
-        StartFlingAll()
-    end
+    if FlingAllActive then StopFlingAll() else StartFlingAll() end
 end)
 
 CloseButton.MouseButton1Click:Connect(function()
@@ -519,10 +565,12 @@ CloseButton.MouseButton1Click:Connect(function()
     StopFlingAll()
     if clickConnection1 then clickConnection1:Disconnect() end
     if clickConnection2 then clickConnection2:Disconnect() end
+    if hoverConnection then hoverConnection:Disconnect() end
+    SelectionHighlight:Destroy()
+    SelectionBillboard:Destroy()
     ScreenGui:Destroy()
 end)
 
--- Handling Target Disconnects
 Players.PlayerRemoving:Connect(function(player)
     if currentTarget == player then
         SetSelectedPlayer(nil)
