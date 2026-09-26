@@ -301,6 +301,7 @@ local function SkidFling(TargetPlayer)
         if not TCharacter:FindFirstChildWhichIsA("BasePart") then return end
         
         local FPos = function(TargetCFrame)
+            if not RootPart or not RootPart.Parent then return end
             RootPart.CFrame = TargetCFrame
             if Character.PrimaryPart then
                 Character:SetPrimaryPartCFrame(TargetCFrame)
@@ -312,15 +313,14 @@ local function SkidFling(TargetPlayer)
         local SFBasePart = function(BasePart)
             local Angle = 0
             repeat
-                if RootPart and THumanoid then
+                if RootPart and RootPart.Parent and THumanoid and THumanoid.Parent then
                     local HasEquippedTool = TCharacter:FindFirstChildOfClass("Tool") ~= nil
-                    Angle = Angle + (HasEquippedTool and 650 or 500)
+                    Angle = (Angle + (HasEquippedTool and 650 or 500)) % 360 -- % 360 evita problemas de desbordamiento
                     local rad = math.rad(Angle)
 
                     local TargetVel = BasePart.Velocity
                     local IsStationary = TargetVel.Magnitude < 2.5
 
-                    -- Distancias reducidas y ajustadas para impacto instantáneo
                     local predictFactor = HasEquippedTool and 0.6 or 0.35
                     local frontDist = HasEquippedTool and 5.0 or 3.5
                     local sideDist = HasEquippedTool and 0.8 or 0.4
@@ -330,7 +330,6 @@ local function SkidFling(TargetPlayer)
                     local sideDir = Vector3.new(-moveDir.Z, 0, moveDir.X)
                     if sideDir.Magnitude > 0.01 then sideDir = sideDir.Unit else sideDir = Vector3.new(1,0,0) end
 
-                    -- Sin fluidez: Oscilaciones agresivas cortas que atraviesan el centro
                     local frontSweep = math.sin(rad * 2) * frontDist
                     local sideSweep = math.cos(rad * 3) * sideDist
                     local heightSweep = math.sin(rad * 1.5) * heightDist
@@ -339,8 +338,10 @@ local function SkidFling(TargetPlayer)
                     local finalPos = predictPos + (moveDir * frontSweep) + (sideDir * sideSweep) + Vector3.new(0, heightSweep, 0)
 
                     FPos(CFrame.new(finalPos) * CFrame.Angles(rad, rad * 2, rad * 1.5))
-                    task.wait()
                 end
+                
+                -- EL ARREGLO ESTÁ AQUÍ: task.wait() ahora está FUERA del 'if', asegurando que el juego no se congele si el target muere.
+                task.wait() 
             until not FlingActive or not BasePart.Parent or BasePart.Velocity.Magnitude > 300
         end
         
@@ -354,13 +355,13 @@ local function SkidFling(TargetPlayer)
         if TRootPart then SFBasePart(TRootPart)
         elseif THead then SFBasePart(THead)
         elseif Handle then SFBasePart(Handle)
-        else return end
+        end
         
-        BV:Destroy()
-        Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+        if BV and BV.Parent then BV:Destroy() end
+        if Humanoid and Humanoid.Parent then Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end
         workspace.CurrentCamera.CameraSubject = Humanoid
         
-        if getgenv().OldPos then
+        if getgenv().OldPos and RootPart and RootPart.Parent then
             repeat
                 RootPart.CFrame = getgenv().OldPos * CFrame.new(0, .5, 0)
                 if Character.PrimaryPart then Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, .5, 0)) end
@@ -369,7 +370,7 @@ local function SkidFling(TargetPlayer)
                     if part:IsA("BasePart") then part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new() end
                 end
                 task.wait()
-            until (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
+            until not RootPart or not RootPart.Parent or (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
             workspace.FallenPartsDestroyHeight = getgenv().FPDH
         end
     end
@@ -399,10 +400,10 @@ local function FastFlingPass(targetPlayer, duration)
     local Angle = 0
     local HasEquippedTool = TCharacter:FindFirstChildOfClass("Tool") ~= nil
 
-    while FlingAllActive and (tick() - startTime < duration) and TRootPart and TRootPart.Parent do
+    while FlingAllActive and (tick() - startTime < duration) and TRootPart and TRootPart.Parent and RootPart and RootPart.Parent do
         if TRootPart.Velocity.Magnitude > 200 then break end
 
-        Angle = Angle + (HasEquippedTool and 700 or 550)
+        Angle = (Angle + (HasEquippedTool and 700 or 550)) % 360
         local rad = math.rad(Angle)
         local TargetVel = TRootPart.Velocity
         local IsStationary = TargetVel.Magnitude < 2.5
@@ -434,8 +435,8 @@ local function FastFlingPass(targetPlayer, duration)
         task.wait()
     end
 
-    BV:Destroy()
-    Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
+    if BV and BV.Parent then BV:Destroy() end
+    if Humanoid and Humanoid.Parent then Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end
 end
 
 local function StartFling()
@@ -522,10 +523,10 @@ local function StartFlingAll()
 
                     if THumanoid and THumanoid.Health > 0 and TRoot and TRoot.Velocity.Magnitude < 150 then
                         targetedAny = true
-                        FastFlingPass(target, 0.1) -- Pase ultra rápido a 0.1s
+                        FastFlingPass(target, 0.1)
                         
                         if FlingAllActive then
-                            task.wait(0.1) -- Pausa rápida de 0.1s entre objetivos
+                            task.wait(0.1)
                         end
                     end
                 end
@@ -536,8 +537,8 @@ local function StartFlingAll()
             end
         end
 
-        if Humanoid then workspace.CurrentCamera.CameraSubject = Humanoid end
-        if getgenv().OldPos and RootPart then
+        if Humanoid and Humanoid.Parent then workspace.CurrentCamera.CameraSubject = Humanoid end
+        if getgenv().OldPos and RootPart and RootPart.Parent then
             repeat
                 RootPart.CFrame = getgenv().OldPos * CFrame.new(0, 0.5, 0)
                 if Character.PrimaryPart then Character:SetPrimaryPartCFrame(getgenv().OldPos * CFrame.new(0, 0.5, 0)) end
@@ -546,7 +547,7 @@ local function StartFlingAll()
                     if part:IsA("BasePart") then part.Velocity, part.RotVelocity = Vector3.new(), Vector3.new() end
                 end
                 task.wait()
-            until not RootPart or (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
+            until not RootPart or not RootPart.Parent or (RootPart.Position - getgenv().OldPos.p).Magnitude < 25
             workspace.FallenPartsDestroyHeight = getgenv().FPDH
         end
     end)
