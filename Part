@@ -45,56 +45,211 @@ end
 ----------------------------------------------------
 -- NETWORK / PART CONTROL
 ----------------------------------------------------
-getgenv().Network = getgenv().Network or {
-	BaseParts = {}
-}
+--[[
+	Detección revisada:
+	1) Anchored == false ya NO se considera suficiente.
+	2) Se comprueba AssemblyRootPart para descartar piezas
+	   físicamente atadas a una assembly anclada.
+	3) Las assemblies se tratan como una sola unidad:
+	   getParts() devuelve únicamente el root de cada assembly.
+	   Esto evita aplicar velocidades/CFrames diferentes a cada
+	   miembro de un mismo objeto soldado.
+	4) Se elimina el "empujón" artificial de cada Heartbeat,
+	   que estaba alterando piezas que simplemente estaban quietas.
+	5) La caché se actualiza periódicamente para detectar piezas
+	   que pasan de Anchored=true a Anchored=false sin hacer
+	   GetDescendants() en cada frame.
+--]]
+
+getgenv().Network = getgenv().Network or {}
+getgenv().Network.BaseParts = {}
+getgenv().Network.ValidParts = {}
+
 local Network = getgenv().Network
 
-local function retainPart(part)
-	if not part:IsA("BasePart") then return end
-	if not part:IsDescendantOf(workspace) then return end
-	if part:IsDescendantOf(Character) then return end
-	if part.Anchored then return end
-	if Network.BaseParts[part] then return end
+local PART_SCAN_INTERVAL = 1.5
+local VALID_CACHE_INTERVAL = 0.20
+local SIMULATION_UPDATE_INTERVAL = 1.0
+local MAX_PART_DISTANCE = 2500
 
-	Network.BaseParts[part] = true
-	pcall(function()
-		part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
-	end)
+local function getAssemblyRoot(part)
+	if not part or not part:IsA("BasePart") then
+		return nil
+	end
+
+	local root = part.AssemblyRootPart
+	if root and root:IsA("BasePart") then
+		return root
+	end
+
+	return part
 end
 
-for _, v in ipairs(workspace:GetDescendants()) do retainPart(v) end
-local descendantConn = workspace.DescendantAdded:Connect(retainPart)
+-- Devuelve el Humanoid al que pertenece la part, si existe.
+-- Se busca hacia arriba para cubrir Character/NPCs, accesorios y
+-- modelos con parts anidadas.
+local function getPartHumanoid(part)
+	if not part or not part.Parent then
+		return nil
+	end
 
-local lastScan = 0
-local scanConn = RunService.Stepped:Connect(function(time)
-	if time - lastScan >= 1.5 then
-		lastScan = time
-		for _, v in ipairs(workspace:GetDescendants()) do
-			if v:IsA("BasePart") and not v.Anchored and not Network.BaseParts[v] then
-				retainPart(v)
+	local node = part.Parent
+
+	while node and node ~= workspace do
+		if node:IsA("Model") then
+			local humanoid = node:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				return humanoid
+			end
+		end
+
+		node = node.Parent
+	end
+
+	return nil
+end
+
+local function isLoosePart(part)
+	if not part or not part:IsA("BasePart") then
+		return false
+	end
+
+	if not part.Parent or not part:IsDescendantOf(workspace) then
+		return false
+	end
+
+	if Character and part:IsDescendantOf(Character) then
+		return false
+	end
+
+	-- No detectar/mover parts pertenecientes a Humanoids VIVOS.
+	-- Cuando Health <= 0, las parts del cuerpo vuelven a ser válidas
+	-- para los efectos (por ejemplo, un cuerpo/ragdoll ya muerto).
+	local humanoid = getPartHumanoid(part)
+	if humanoid and humanoid.Health > 0 then
+		return false
+	end
+
+	-- Una pieza realmente anclada nunca es válida.
+	if part.Anchored then
+		return false
+	end
+
+	-- Una part puede tener Anchored=false y aun así pertenecer a
+	-- una assembly cuyo root está anclado.
+	local root = getAssemblyRoot(part)
+
+	if root then
+		if root.Anchored then
+			return false
+		end
+
+		if Character and root:IsDescendantOf(Character) then
+			return false
+		end
+
+		-- Comprobar también el Humanoid del root evita que una
+		-- assembly de un personaje vivo entre por otra part.
+		local rootHumanoid = getPartHumanoid(root)
+		if rootHumanoid and rootHumanoid.Health > 0 then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function retainPart(part)
+	if not isLoosePart(part) then
+		return
+	end
+
+	if Network.BaseParts[part] then
+		return
+	end
+
+	Network.BaseParts[part] = true
+end
+
+local function scanWorkspaceParts()
+	for _, v in ipairs(workspace:GetDescendants()) do
+		if v:IsA("BasePart") then
+			retainPart(v)
+		end
+	end
+end
+
+local function refreshValidPartCache()
+	local valid = {}
+	local seenAssemblies = {}
+
+	for part in pairs(Network.BaseParts) do
+		if not isLoosePart(part) then
+			Network.BaseParts[part] = nil
+		else
+			local root = getAssemblyRoot(part)
+
+			-- Solo trabajamos una vez por assembly.
+			if root and not seenAssemblies[root] then
+				seenAssemblies[root] = true
+				table.insert(valid, root)
 			end
 		end
 	end
+
+	Network.ValidParts = valid
+end
+
+-- Registro inicial.
+scanWorkspaceParts()
+refreshValidPartCache()
+
+-- Detecta piezas nuevas inmediatamente.
+local descendantConn = workspace.DescendantAdded:Connect(function(instance)
+	if instance:IsA("BasePart") then
+		retainPart(instance)
+	end
 end)
 
-local networkConn = RunService.Heartbeat:Connect(function()
-	pcall(function()
-		sethiddenproperty(LocalPlayer, "SimulationRadius", 100000)
-		sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 100000)
-	end)
+-- Escaneo lento solamente para detectar cambios de Anchored/assembly.
+local scanTimer = 0
+local cacheTimer = 0
 
-	for part in pairs(Network.BaseParts) do
-		if not part or not part.Parent or not part:IsDescendantOf(workspace) or part.Anchored then
-			Network.BaseParts[part] = nil
-		else
-			pcall(function()
-				if part.AssemblyLinearVelocity.Magnitude < 0.01 then
-					part.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
-				end
-			end)
-		end
+local scanConn = RunService.Heartbeat:Connect(function(dt)
+	scanTimer += dt
+	cacheTimer += dt
+
+	if cacheTimer >= VALID_CACHE_INTERVAL then
+		cacheTimer = 0
+		refreshValidPartCache()
 	end
+
+	if scanTimer >= PART_SCAN_INTERVAL then
+		scanTimer = 0
+		scanWorkspaceParts()
+		refreshValidPartCache()
+	end
+end)
+
+-- SimulationRadius se actualiza con baja frecuencia.
+-- Ya NO se modifica la velocidad de cada pieza automáticamente.
+local simulationTimer = 0
+
+local networkConn = RunService.Heartbeat:Connect(function(dt)
+	simulationTimer += dt
+
+	if simulationTimer < SIMULATION_UPDATE_INTERVAL then
+		return
+	end
+
+	simulationTimer = 0
+
+	pcall(function()
+		if sethiddenproperty then
+			sethiddenproperty(LocalPlayer, "SimulationRadius", 100000)
+			sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 100000)
+		end
+	end)
 end)
 
 ----------------------------------------------------
@@ -418,8 +573,8 @@ local function stopEffect()
 	table.clear(activeControlConnections)
 	table.clear(effectParams)
 
-	for part in pairs(Network.BaseParts) do
-		if part and part.Parent and not part.Anchored then
+	for _, part in ipairs(Network.ValidParts) do
+		if isLoosePart(part) then
 			pcall(function()
 				part.AssemblyLinearVelocity = Vector3.zero
 				part.AssemblyAngularVelocity = Vector3.zero
@@ -626,11 +781,19 @@ end)
 local function getParts()
 	local valid = {}
 	local myPos = HRP and HRP.Position or Vector3.zero
-	for part in pairs(Network.BaseParts) do
-		if part and part.Parent and not part.Anchored and not part:IsDescendantOf(Character) then
-			if (part.Position - myPos).Magnitude <= 2500 then table.insert(valid, part) end
+	local maxDistanceSq = MAX_PART_DISTANCE * MAX_PART_DISTANCE
+
+	-- ValidParts ya contiene únicamente roots de assemblies libres.
+	-- Aquí solo hacemos la comprobación de distancia.
+	for _, part in ipairs(Network.ValidParts) do
+		if isLoosePart(part) then
+			local offset = part.Position - myPos
+			if offset:Dot(offset) <= maxDistanceSq then
+				table.insert(valid, part)
+			end
 		end
 	end
+
 	return valid
 end
 
@@ -1130,5 +1293,6 @@ CloseBtn.MouseButton1Click:Connect(function()
 	if networkConn then networkConn:Disconnect() end
 	if playerRemovingConn then playerRemovingConn:Disconnect() end
 	getgenv().Network.BaseParts = {}
+	getgenv().Network.ValidParts = {}
 	gui:Destroy()
 end)
