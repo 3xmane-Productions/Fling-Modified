@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 
 --// PLAYER
 local LocalPlayer = Players.LocalPlayer
@@ -16,13 +17,37 @@ LocalPlayer.CharacterAdded:Connect(function(c)
 end)
 
 ----------------------------------------------------
--- NETWORK / PART CONTROL (OPTIMIZADO PARA ANCHORED)
+-- PERSISTENCIA DE CONFIGURACIONES
 ----------------------------------------------------
+local CONFIG_FILE = "PhysicsGuiSettings.json"
 
+local function loadSavedSettings()
+	if isfile and readfile and isfile(CONFIG_FILE) then
+		local success, data = pcall(function()
+			return HttpService:JSONDecode(readfile(CONFIG_FILE))
+		end)
+		if success and type(data) == "table" then return data end
+	end
+	return getgenv().SavedPhysicsParams or {}
+end
+
+local savedParams = loadSavedSettings()
+
+local function saveSettings()
+	getgenv().SavedPhysicsParams = savedParams
+	if writefile then
+		pcall(function()
+			writefile(CONFIG_FILE, HttpService:JSONEncode(savedParams))
+		end)
+	end
+end
+
+----------------------------------------------------
+-- NETWORK / PART CONTROL
+----------------------------------------------------
 getgenv().Network = getgenv().Network or {
 	BaseParts = {}
 }
-
 local Network = getgenv().Network
 
 local function retainPart(part)
@@ -33,16 +58,12 @@ local function retainPart(part)
 	if Network.BaseParts[part] then return end
 
 	Network.BaseParts[part] = true
-
 	pcall(function()
 		part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
 	end)
 end
 
-for _, v in ipairs(workspace:GetDescendants()) do
-	retainPart(v)
-end
-
+for _, v in ipairs(workspace:GetDescendants()) do retainPart(v) end
 local descendantConn = workspace.DescendantAdded:Connect(retainPart)
 
 local lastScan = 0
@@ -56,10 +77,6 @@ local scanConn = RunService.Stepped:Connect(function(time)
 		end
 	end
 end)
-
-----------------------------------------------------
--- KEEP NETWORK OWNERSHIP & REPLICATION
-----------------------------------------------------
 
 local networkConn = RunService.Heartbeat:Connect(function()
 	pcall(function()
@@ -81,9 +98,89 @@ local networkConn = RunService.Heartbeat:Connect(function()
 end)
 
 ----------------------------------------------------
+-- WIREFRAME 3D MATH HELPERS (FIGURAS HUECAS)
+----------------------------------------------------
+local function getWireframePoint(vertices, edges, progress)
+	local totalEdges = #edges
+	if totalEdges == 0 then return Vector3.zero end
+	local floatEdge = (progress % 1) * totalEdges
+	local edgeIdx = math.clamp(math.floor(floatEdge) + 1, 1, totalEdges)
+	local edgeAlpha = floatEdge - math.floor(floatEdge)
+	
+	local edge = edges[edgeIdx]
+	local v1 = vertices[edge[1]]
+	local v2 = vertices[edge[2]]
+	return v1:Lerp(v2, edgeAlpha)
+end
+
+local wireframeShapes = {
+	-- 1. Cubo Wireframe
+	{
+		vertices = {
+			Vector3.new(-1, -1, -1), Vector3.new(1, -1, -1), Vector3.new(1, 1, -1), Vector3.new(-1, 1, -1),
+			Vector3.new(-1, -1, 1),  Vector3.new(1, -1, 1),  Vector3.new(1, 1, 1),  Vector3.new(-1, 1, 1)
+		},
+		edges = {
+			{1,2}, {2,3}, {3,4}, {4,1},
+			{5,6}, {6,7}, {7,8}, {8,5},
+			{1,5}, {2,6}, {3,7}, {4,8}
+		}
+	},
+	-- 2. Octaedro / Diamante 3D
+	{
+		vertices = {
+			Vector3.new(0, 1.2, 0), Vector3.new(0, -1.2, 0),
+			Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0),
+			Vector3.new(0, 0, 1), Vector3.new(0, 0, -1)
+		},
+		edges = {
+			{1,3}, {1,4}, {1,5}, {1,6},
+			{2,3}, {2,4}, {2,5}, {2,6},
+			{3,5}, {5,4}, {4,6}, {6,3}
+		}
+	},
+	-- 3. Pirámide 3D
+	{
+		vertices = {
+			Vector3.new(0, 1, 0),
+			Vector3.new(-1, -1, -1), Vector3.new(1, -1, -1),
+			Vector3.new(1, -1, 1), Vector3.new(-1, -1, 1)
+		},
+		edges = {
+			{2,3}, {3,4}, {4,5}, {5,2},
+			{1,2}, {1,3}, {1,4}, {1,5}
+		}
+	},
+	-- 4. Prisma Triangular 3D
+	{
+		vertices = {
+			Vector3.new(0, 1, 0.8), Vector3.new(-0.866, -0.5, 0.8), Vector3.new(0.866, -0.5, 0.8),
+			Vector3.new(0, 1, -0.8), Vector3.new(-0.866, -0.5, -0.8), Vector3.new(0.866, -0.5, -0.8)
+		},
+		edges = {
+			{1,2}, {2,3}, {3,1},
+			{4,5}, {5,6}, {6,4},
+			{1,4}, {2,5}, {3,6}
+		}
+	},
+	-- 5. Estrella 3D (Doble Pirámide)
+	{
+		vertices = {
+			Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
+			Vector3.new(1, 0, 1), Vector3.new(-1, 0, 1),
+			Vector3.new(-1, 0, -1), Vector3.new(1, 0, -1)
+		},
+		edges = {
+			{1,3}, {1,4}, {1,5}, {1,6},
+			{2,3}, {2,4}, {2,5}, {2,6},
+			{3,4}, {4,5}, {5,6}, {6,3}
+		}
+	}
+}
+
+----------------------------------------------------
 -- VARIABLES
 ----------------------------------------------------
-
 local currentEffect = nil
 local effectConnection = nil
 local selectedPlayer = nil
@@ -92,26 +189,23 @@ local blackHoleHolding = false
 local tornadoHolding = false
 local clickTpMode = false
 
-----------------------------------------------------
--- GUI
-----------------------------------------------------
+local effectParams = {}
+local activeControlConnections = {}
 
+----------------------------------------------------
+-- GUI MAIN
+----------------------------------------------------
 local gui = Instance.new("ScreenGui")
 gui.Name = "AdvancedPhysicsGUI"
 gui.ResetOnSpawn = false
 gui.Parent = PlayerGui
 
-----------------------------------------------------
--- MAIN FRAME
-----------------------------------------------------
-
 local Main = Instance.new("Frame")
 Main.Parent = gui
-Main.Size = UDim2.new(0, 430, 0, 450)
-Main.Position = UDim2.new(0.5, -215, 0.5, -225)
+Main.Size = UDim2.new(0, 430, 0, 500)
+Main.Position = UDim2.new(0.5, -215, 0.5, -250)
 Main.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
 Main.BorderSizePixel = 0
-
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 18)
 
 local Stroke = Instance.new("UIStroke")
@@ -119,54 +213,81 @@ Stroke.Parent = Main
 Stroke.Color = Color3.fromRGB(70, 70, 70)
 
 ----------------------------------------------------
+-- TARGET HIGHLIGHT (BRILLO INTENSO Y SOLO OBJETIVOS)
+----------------------------------------------------
+local TargetHighlight = Instance.new("Highlight")
+TargetHighlight.Name = "TargetGlow"
+TargetHighlight.FillColor = Color3.fromRGB(255, 255, 255)
+TargetHighlight.OutlineColor = Color3.fromRGB(0, 255, 255)
+TargetHighlight.FillTransparency = 0.25
+TargetHighlight.OutlineTransparency = 0
+TargetHighlight.Enabled = false
+TargetHighlight.Parent = gui
+
+----------------------------------------------------
+-- CONTROL FRAME
+----------------------------------------------------
+local ControlFrame = Instance.new("Frame")
+ControlFrame.Parent = Main
+ControlFrame.Size = UDim2.new(0, 200, 1, 0)
+ControlFrame.Position = UDim2.new(0, -210, 0, 0)
+ControlFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+ControlFrame.Visible = false
+Instance.new("UICorner", ControlFrame).CornerRadius = UDim.new(0, 18)
+Instance.new("UIStroke", ControlFrame).Color = Color3.fromRGB(70, 70, 70)
+
+local ControlTitle = Instance.new("TextLabel", ControlFrame)
+ControlTitle.Size = UDim2.new(1, 0, 0, 45)
+ControlTitle.BackgroundTransparency = 1
+ControlTitle.Text = "Settings"
+ControlTitle.Font = Enum.Font.GothamBold
+ControlTitle.TextSize = 16
+ControlTitle.TextColor3 = Color3.new(1, 1, 1)
+
+local ControlsHolder = Instance.new("ScrollingFrame", ControlFrame)
+ControlsHolder.Size = UDim2.new(1, -16, 1, -100)
+ControlsHolder.Position = UDim2.new(0, 8, 0, 45)
+ControlsHolder.BackgroundTransparency = 1
+ControlsHolder.ScrollBarThickness = 2
+ControlsHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ControlsHolder.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+local ControlGrid = Instance.new("UIListLayout", ControlsHolder)
+ControlGrid.SortOrder = Enum.SortOrder.LayoutOrder
+ControlGrid.Padding = UDim.new(0, 8)
+
+----------------------------------------------------
 -- DRAGGING
 ----------------------------------------------------
-
 local dragging = false
 local dragStart, startPos, dragInput
-
-local function updateDrag(input)
-	local delta = input.Position - dragStart
-	Main.Position = UDim2.new(
-		startPos.X.Scale,
-		startPos.X.Offset + delta.X,
-		startPos.Y.Scale,
-		startPos.Y.Offset + delta.Y
-	)
-end
 
 Main.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		dragging = true
 		dragStart = input.Position
 		startPos = Main.Position
-
 		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				dragging = false
-			end
+			if input.UserInputState == Enum.UserInputState.End then dragging = false end
 		end)
 	end
 end)
 
 Main.InputChanged:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseMovement then
-		dragInput = input
-	end
+	if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
 	if input == dragInput and dragging then
-		updateDrag(input)
+		local delta = input.Position - dragStart
+		Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 	end
 end)
 
 ----------------------------------------------------
 -- TITLES & STATUS
 ----------------------------------------------------
-
-local Title = Instance.new("TextLabel")
-Title.Parent = Main
+local Title = Instance.new("TextLabel", Main)
 Title.Size = UDim2.new(1, 0, 0, 45)
 Title.BackgroundTransparency = 1
 Title.Text = "Advanced Physics Controller"
@@ -174,8 +295,7 @@ Title.Font = Enum.Font.GothamBold
 Title.TextSize = 20
 Title.TextColor3 = Color3.new(1, 1, 1)
 
-local Status = Instance.new("TextLabel")
-Status.Parent = Main
+local Status = Instance.new("TextLabel", Main)
 Status.Size = UDim2.new(1, 0, 0, 20)
 Status.Position = UDim2.new(0, 0, 0, 40)
 Status.BackgroundTransparency = 1
@@ -184,34 +304,133 @@ Status.Font = Enum.Font.Gotham
 Status.TextSize = 14
 Status.TextColor3 = Color3.fromRGB(0, 255, 120)
 
-local TargetStatus = Instance.new("TextLabel")
-TargetStatus.Parent = Main
+local TargetStatus = Instance.new("TextLabel", Main)
 TargetStatus.Size = UDim2.new(1, 0, 0, 18)
 TargetStatus.Position = UDim2.new(0, 0, 0, 58)
 TargetStatus.BackgroundTransparency = 1
 TargetStatus.Text = "Target: Yourself"
 TargetStatus.Font = Enum.Font.Gotham
 TargetStatus.TextSize = 13
-TargetStatus.TextColor3 = Color3.fromRGB(255, 255, 255)
+TargetStatus.TextColor3 = Color3.new(1, 1, 1)
 
 ----------------------------------------------------
--- PLAYER SEARCH BOX
+-- TABS & SEARCH
 ----------------------------------------------------
+local TabFrame = Instance.new("Frame", Main)
+TabFrame.Size = UDim2.new(1, -20, 0, 35)
+TabFrame.Position = UDim2.new(0, 10, 0, 85)
+TabFrame.BackgroundTransparency = 1
 
-local SearchBox = Instance.new("TextBox")
-SearchBox.Parent = Main
+local TabEffects = Instance.new("TextButton", TabFrame)
+TabEffects.Size = UDim2.new(0.48, 0, 1, 0)
+TabEffects.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+TabEffects.Text = "Effects"
+TabEffects.Font = Enum.Font.GothamBold
+TabEffects.TextColor3 = Color3.new(1, 1, 1)
+TabEffects.TextSize = 14
+Instance.new("UICorner", TabEffects).CornerRadius = UDim.new(0, 8)
+
+local TabChaos = Instance.new("TextButton", TabFrame)
+TabChaos.Size = UDim2.new(0.48, 0, 1, 0)
+TabChaos.Position = UDim2.new(0.52, 0, 0, 0)
+TabChaos.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+TabChaos.Text = "Chaos"
+TabChaos.Font = Enum.Font.GothamBold
+TabChaos.TextColor3 = Color3.new(0.6, 0.6, 0.6)
+TabChaos.TextSize = 14
+Instance.new("UICorner", TabChaos).CornerRadius = UDim.new(0, 8)
+
+local SearchBox = Instance.new("TextBox", Main)
 SearchBox.Size = UDim2.new(1, -20, 0, 38)
-SearchBox.Position = UDim2.new(0, 10, 0, 85)
+SearchBox.Position = UDim2.new(0, 10, 0, 130)
 SearchBox.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
 SearchBox.BorderSizePixel = 0
-SearchBox.PlaceholderText = "Target Player (Username or DisplayName)"
+SearchBox.PlaceholderText = "Target Player"
 SearchBox.Text = ""
 SearchBox.Font = Enum.Font.Gotham
 SearchBox.TextSize = 14
 SearchBox.TextColor3 = Color3.new(1, 1, 1)
-
 Instance.new("UICorner", SearchBox).CornerRadius = UDim.new(0, 10)
 
+----------------------------------------------------
+-- HOLDERS
+----------------------------------------------------
+local HolderEffects = Instance.new("ScrollingFrame", Main)
+HolderEffects.Size = UDim2.new(1, -20, 1, -245)
+HolderEffects.Position = UDim2.new(0, 10, 0, 180)
+HolderEffects.BackgroundTransparency = 1
+HolderEffects.ScrollBarThickness = 4
+HolderEffects.AutomaticCanvasSize = Enum.AutomaticSize.Y
+HolderEffects.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+local GridEffects = Instance.new("UIGridLayout", HolderEffects)
+GridEffects.CellSize = UDim2.new(0.48, 0, 0, 45)
+GridEffects.CellPadding = UDim2.new(0, 8, 0, 8)
+
+local HolderChaos = Instance.new("ScrollingFrame", Main)
+HolderChaos.Size = HolderEffects.Size
+HolderChaos.Position = HolderEffects.Position
+HolderChaos.BackgroundTransparency = 1
+HolderChaos.ScrollBarThickness = 4
+HolderChaos.AutomaticCanvasSize = Enum.AutomaticSize.Y
+HolderChaos.CanvasSize = UDim2.new(0, 0, 0, 0)
+HolderChaos.Visible = false
+
+local GridChaos = Instance.new("UIGridLayout", HolderChaos)
+GridChaos.CellSize = UDim2.new(0.48, 0, 0, 45)
+GridChaos.CellPadding = UDim2.new(0, 8, 0, 8)
+
+TabEffects.MouseButton1Click:Connect(function()
+	HolderEffects.Visible = true
+	HolderChaos.Visible = false
+	TabEffects.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	TabEffects.TextColor3 = Color3.new(1, 1, 1)
+	TabChaos.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	TabChaos.TextColor3 = Color3.new(0.6, 0.6, 0.6)
+end)
+
+TabChaos.MouseButton1Click:Connect(function()
+	HolderEffects.Visible = false
+	HolderChaos.Visible = true
+	TabChaos.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	TabChaos.TextColor3 = Color3.new(1, 1, 1)
+	TabEffects.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	TabEffects.TextColor3 = Color3.new(0.6, 0.6, 0.6)
+end)
+
+local function stopEffect()
+	currentEffect = nil
+	Status.Text = "Effect: None"
+	blackHoleHolding = false
+	tornadoHolding = false
+	clickTpMode = false
+
+	if effectConnection then
+		effectConnection:Disconnect()
+		effectConnection = nil
+	end
+
+	ControlFrame.Visible = false
+	for _, child in ipairs(ControlsHolder:GetChildren()) do
+		if child:IsA("Frame") then child:Destroy() end
+	end
+	for _, conn in ipairs(activeControlConnections) do conn:Disconnect() end
+	table.clear(activeControlConnections)
+	table.clear(effectParams)
+
+	for part in pairs(Network.BaseParts) do
+		if part and part.Parent and not part.Anchored then
+			pcall(function()
+				part.AssemblyLinearVelocity = Vector3.zero
+				part.AssemblyAngularVelocity = Vector3.zero
+			end)
+		end
+	end
+end
+
+----------------------------------------------------
+-- PLAYER SEARCH
+----------------------------------------------------
 local function findPlayer(str)
 	str = string.lower(str)
 	for _, plr in ipairs(Players:GetPlayers()) do
@@ -229,7 +448,6 @@ SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
 		TargetStatus.Text = "Target: Yourself"
 		return
 	end
-
 	local found = findPlayer(text)
 	if found then
 		selectedPlayer = found
@@ -245,629 +463,623 @@ local playerRemovingConn = Players.PlayerRemoving:Connect(function(plr)
 		selectedPlayer = nil
 		SearchBox.Text = ""
 		TargetStatus.Text = "Target: Yourself"
+		stopEffect()
 	end
 end)
 
 ----------------------------------------------------
--- HOLDER (SCROLLING FRAME PARA SOPORTAR MÁS BOTONES)
+-- SLIDER SYSTEM FLUIDO, PERSISTENTE Y AUTO-ZERO
 ----------------------------------------------------
+local function AddControl(paramName, minVal, softMax, defaultVal)
+	ControlFrame.Visible = true
 
-local Holder = Instance.new("ScrollingFrame")
-Holder.Parent = Main
-Holder.Size = UDim2.new(1, -20, 1, -145)
-Holder.Position = UDim2.new(0, 10, 0, 135)
-Holder.BackgroundTransparency = 1
-Holder.BorderSizePixel = 0
-Holder.ScrollBarThickness = 4
-Holder.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 80)
-Holder.AutomaticCanvasSize = Enum.AutomaticSize.Y
-Holder.CanvasSize = UDim2.new(0, 0, 0, 0)
+	if not savedParams[currentEffect] then savedParams[currentEffect] = {} end
+	local valToUse = savedParams[currentEffect][paramName]
+	if valToUse == nil then valToUse = defaultVal end
+	effectParams[paramName] = valToUse
 
-local Grid = Instance.new("UIGridLayout")
-Grid.Parent = Holder
-Grid.CellSize = UDim2.new(0.48, 0, 0, 45)
-Grid.CellPadding = UDim2.new(0, 8, 0, 8)
+	local Container = Instance.new("Frame", ControlsHolder)
+	Container.Size = UDim2.new(1, 0, 0, 45)
+	Container.BackgroundTransparency = 1
+
+	local Label = Instance.new("TextLabel", Container)
+	Label.Size = UDim2.new(0.6, 0, 0, 18)
+	Label.BackgroundTransparency = 1
+	Label.Text = paramName
+	Label.Font = Enum.Font.Gotham
+	Label.TextSize = 12
+	Label.TextColor3 = Color3.new(1, 1, 1)
+	Label.TextXAlignment = Enum.TextXAlignment.Left
+
+	local Input = Instance.new("TextBox", Container)
+	Input.Size = UDim2.new(0.35, 0, 0, 18)
+	Input.Position = UDim2.new(0.65, 0, 0, 0)
+	Input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	Input.Text = tostring(valToUse)
+	Input.Font = Enum.Font.Gotham
+	Input.TextSize = 11
+	Input.TextColor3 = Color3.new(1, 1, 1)
+	Instance.new("UICorner", Input).CornerRadius = UDim.new(0, 4)
+
+	local SliderBG = Instance.new("Frame", Container)
+	SliderBG.Size = UDim2.new(1, 0, 0, 6)
+	SliderBG.Position = UDim2.new(0, 0, 0, 25)
+	SliderBG.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	Instance.new("UICorner", SliderBG).CornerRadius = UDim.new(1, 0)
+
+	local SliderBtn = Instance.new("TextButton", SliderBG)
+	SliderBtn.Size = UDim2.new(0, 12, 0, 12)
+	SliderBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+	
+	local initialPercent = math.clamp((valToUse - minVal) / (softMax - minVal), 0, 1)
+	SliderBtn.Position = UDim2.new(initialPercent, 0, 0.5, 0)
+	SliderBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+	SliderBtn.Text = ""
+	Instance.new("UICorner", SliderBtn).CornerRadius = UDim.new(1, 0)
+
+	local isDragging = false
+	table.insert(activeControlConnections, SliderBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = true end
+	end))
+
+	table.insert(activeControlConnections, UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = false end
+	end))
+
+	table.insert(activeControlConnections, RunService.RenderStepped:Connect(function()
+		if isDragging then
+			local mousePos = UserInputService:GetMouseLocation().X
+			local barAbs = SliderBG.AbsolutePosition.X
+			local barSize = SliderBG.AbsoluteSize.X
+			if barSize > 0 then
+				local p = math.clamp((mousePos - barAbs) / barSize, 0, 1)
+				local val = minVal + (p * (softMax - minVal))
+				val = math.floor(val * 100) / 100 -- Alta precisión para movimientos fluidos
+				
+				SliderBtn.Position = UDim2.new(p, 0, 0.5, 0)
+				Input.Text = tostring(val)
+				effectParams[paramName] = val
+				savedParams[currentEffect][paramName] = val
+				saveSettings()
+			end
+		end
+	end))
+
+	-- Al dar click limpia el texto, y si se deja vacío pone 0 automáticamente
+	table.insert(activeControlConnections, Input.Focused:Connect(function()
+		Input.Text = ""
+	end))
+
+	table.insert(activeControlConnections, Input.FocusLost:Connect(function()
+		local num = tonumber(Input.Text)
+		if not num or Input.Text == "" then
+			num = 0
+		end
+		Input.Text = tostring(num)
+		effectParams[paramName] = num
+		savedParams[currentEffect][paramName] = num
+		saveSettings()
+
+		local p = math.clamp((num - minVal) / (softMax - minVal), 0, 1)
+		SliderBtn.Position = UDim2.new(p, 0, 0.5, 0)
+	end))
+end
 
 ----------------------------------------------------
--- BUTTON CREATOR
+-- SYSTEM UTILS
 ----------------------------------------------------
-
-local function createButton(text, color)
+local function createButton(parent, text, color)
 	local b = Instance.new("TextButton")
-	b.Parent = Holder
+	b.Parent = parent
 	b.BackgroundColor3 = color
 	b.BorderSizePixel = 0
 	b.Text = text
 	b.Font = Enum.Font.GothamBold
-	b.TextSize = 14
+	b.TextSize = 13
 	b.TextColor3 = Color3.new(1, 1, 1)
-
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 12)
-
-	b.MouseEnter:Connect(function()
-		TweenService:Create(b, TweenInfo.new(0.15), {BackgroundTransparency = 0.2}):Play()
-	end)
-
-	b.MouseLeave:Connect(function()
-		TweenService:Create(b, TweenInfo.new(0.15), {BackgroundTransparency = 0}):Play()
-	end)
-
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
 	return b
 end
 
-----------------------------------------------------
--- EFFECT SYSTEM (DESACTIVACIÓN Y LIMPIEZA COMPLETA)
-----------------------------------------------------
-
-local function stopEffect()
-	currentEffect = nil
-	Status.Text = "Effect: None"
-
-	blackHoleHolding = false
-	tornadoHolding = false
-	clickTpMode = false
-
-	if effectConnection then
-		effectConnection:Disconnect()
-		effectConnection = nil
-	end
-
-	-- Limpieza de inercia al cambiar o detener cualquier efecto
-	for part in pairs(Network.BaseParts) do
-		if part and part.Parent and not part.Anchored then
-			pcall(function()
-				part.AssemblyLinearVelocity = Vector3.zero
-				part.AssemblyAngularVelocity = Vector3.zero
-			end)
-		end
-	end
-end
-
-local function startEffect(name, func)
+local function startEffect(name, func, setupControlsCallback)
 	if currentEffect == name then
 		stopEffect()
 		return
 	end
-
 	stopEffect()
 	currentEffect = name
 	Status.Text = "Effect: " .. name
+	if setupControlsCallback then setupControlsCallback() end
 	effectConnection = RunService.Heartbeat:Connect(func)
 end
 
-----------------------------------------------------
--- GET TARGET HRP
-----------------------------------------------------
-
 local function getTargetHRP()
-	if selectedPlayer then
-		local char = selectedPlayer.Character
-		if char then
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			local hrp = char:FindFirstChild("HumanoidRootPart")
-			if hrp and hum and hum.Health > 0 then
-				return hrp
-			end
-		end
-		return nil
-	end
-
-	if Character then
+	if selectedPlayer and selectedPlayer.Character then
+		local hum = selectedPlayer.Character:FindFirstChildOfClass("Humanoid")
+		local hrp = selectedPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if hrp and hum and hum.Health > 0 then return hrp end
+	elseif Character then
 		local hum = Character:FindFirstChildOfClass("Humanoid")
-		if HRP and hum and hum.Health > 0 then
-			return HRP
-		end
+		if HRP and hum and hum.Health > 0 then return HRP end
 	end
-
 	return nil
 end
 
-----------------------------------------------------
--- MOUSE RAYCAST FILTER
-----------------------------------------------------
-
-local mouse = LocalPlayer:GetMouse()
-
-local function getMouseTarget()
-	local ray = workspace.CurrentCamera:ScreenPointToRay(mouse.X, mouse.Y)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-
-	local filterList = {Character}
-	if selectedPlayer and selectedPlayer.Character then
-		table.insert(filterList, selectedPlayer.Character)
+-- Actualiza el brillo ÚNICAMENTE en otros jugadores (NO en ti mismo)
+RunService.Heartbeat:Connect(function()
+	if selectedPlayer and selectedPlayer ~= LocalPlayer and selectedPlayer.Character then
+		local hrp = selectedPlayer.Character:FindFirstChild("HumanoidRootPart")
+		local hum = selectedPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hrp and hum and hum.Health > 0 then
+			TargetHighlight.Adornee = selectedPlayer.Character
+			TargetHighlight.Enabled = true
+		else
+			TargetHighlight.Adornee = nil
+			TargetHighlight.Enabled = false
+		end
+	else
+		TargetHighlight.Adornee = nil
+		TargetHighlight.Enabled = false
 	end
-
-	for part in pairs(Network.BaseParts) do
-		table.insert(filterList, part)
-	end
-
-	params.FilterDescendantsInstances = filterList
-
-	local result = workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
-	if result then
-		return result.Position
-	end
-	return ray.Origin + (ray.Direction * 150)
-end
-
-----------------------------------------------------
--- GET VALID PARTS
-----------------------------------------------------
+end)
 
 local function getParts()
 	local valid = {}
 	local myPos = HRP and HRP.Position or Vector3.zero
-
 	for part in pairs(Network.BaseParts) do
 		if part and part.Parent and not part.Anchored and not part:IsDescendantOf(Character) then
-			if (part.Position - myPos).Magnitude <= 2500 then
-				table.insert(valid, part)
-			end
+			if (part.Position - myPos).Magnitude <= 2500 then table.insert(valid, part) end
 		end
 	end
-
 	return valid
 end
 
+local mouse = LocalPlayer:GetMouse()
+local function getMouseTarget()
+	local ray = workspace.CurrentCamera:ScreenPointToRay(mouse.X, mouse.Y)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local filterList = {Character}
+	if selectedPlayer and selectedPlayer.Character then table.insert(filterList, selectedPlayer.Character) end
+	for part in pairs(Network.BaseParts) do table.insert(filterList, part) end
+	params.FilterDescendantsInstances = filterList
+
+	local result = workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
+	return result and result.Position or ray.Origin + (ray.Direction * 150)
+end
+
 ----------------------------------------------------
--- LIFT
+-- EFFECTS TAB
 ----------------------------------------------------
 
-createButton("Lift", Color3.fromRGB(60, 120, 255)).MouseButton1Click:Connect(function()
+createButton(HolderEffects, "Lift", Color3.fromRGB(60, 120, 255)).MouseButton1Click:Connect(function()
 	startEffect("Lift", function()
 		for _, part in ipairs(getParts()) do
-			part.AssemblyLinearVelocity = Vector3.new(0, 35, 0)
+			part.AssemblyLinearVelocity = Vector3.new(0, effectParams["Velocidad (Subida)"], 0)
 		end
+	end, function()
+		AddControl("Velocidad (Subida)", -200, 200, 35)
 	end)
 end)
 
-----------------------------------------------------
--- ORBIT
-----------------------------------------------------
-
 local orbitTick = 0
-
-createButton("Orbit", Color3.fromRGB(0, 220, 170)).MouseButton1Click:Connect(function()
+createButton(HolderEffects, "Orbit", Color3.fromRGB(0, 220, 170)).MouseButton1Click:Connect(function()
 	startEffect("Orbit", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
-
-		orbitTick += 0.05
-		for _, part in ipairs(getParts()) do
-			local target = targetHRP.Position + Vector3.new(
-				math.cos(orbitTick) * 25,
-				8,
-				math.sin(orbitTick) * 25
-			)
-			part.AssemblyLinearVelocity = (target - part.Position) * 6
+		orbitTick += (0.05 * effectParams["Velocidad"])
+		local dist = effectParams["Distancia"]
+		local parts = getParts()
+		local total = #parts
+		
+		for i, part in ipairs(parts) do
+			local angle = orbitTick + ((i / total) * math.pi * 2)
+			local targetPos = targetHRP.Position + Vector3.new(math.cos(angle) * dist, 8, math.sin(angle) * dist)
+			part.AssemblyLinearVelocity = (targetPos - part.Position) * 15
 		end
+	end, function()
+		AddControl("Velocidad", -20, 20, 1)
+		AddControl("Distancia", -150, 150, 25)
 	end)
 end)
 
-----------------------------------------------------
--- SPHERE (Gigante y Rotación Fluida)
-----------------------------------------------------
-
 local sphereTick = 0
-
-createButton("Sphere", Color3.fromRGB(150, 80, 255)).MouseButton1Click:Connect(function()
+createButton(HolderEffects, "Sphere", Color3.fromRGB(150, 80, 255)).MouseButton1Click:Connect(function()
 	startEffect("Sphere", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
-
-		sphereTick += 0.015
+		sphereTick += (0.015 * effectParams["Velocidad"])
 		local parts = getParts()
 		local total = #parts
 		if total == 0 then return end
-
-		local radius = 180
+		local radius = effectParams["Distancia"]
 		local phi = math.pi * (3 - math.sqrt(5))
 
 		for i, part in ipairs(parts) do
 			local y = 1 - (i / total) * 2
 			local r = math.sqrt(1 - y * y) * radius
 			local theta = phi * i + (sphereTick * 2.5)
-
 			local localPos = Vector3.new(math.cos(theta) * r, y * radius, math.sin(theta) * r)
-			local targetPos = targetHRP.Position + localPos
-
-			part.AssemblyLinearVelocity = (targetPos - part.Position) * 18
-			part.AssemblyAngularVelocity = Vector3.new(12, 12, 12)
+			part.AssemblyLinearVelocity = ((targetHRP.Position + localPos) - part.Position) * 18
 		end
+	end, function()
+		AddControl("Velocidad", -20, 20, 1)
+		AddControl("Distancia", -300, 300, 100)
 	end)
 end)
 
-----------------------------------------------------
--- WINGS (Aleteo Extenso, Pausado y Partes Separadas)
-----------------------------------------------------
-
 local wingTick = 0
-
-createButton("Wings", Color3.fromRGB(0, 180, 255)).MouseButton1Click:Connect(function()
+createButton(HolderEffects, "Wings", Color3.fromRGB(0, 180, 255)).MouseButton1Click:Connect(function()
 	startEffect("Wings", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
-
-		wingTick += 0.035 -- Aleteo pausado/elegante
+		wingTick += (0.035 * effectParams["Aleteo"])
 		local parts = getParts()
 		local total = #parts
 		if total == 0 then return end
-
 		local halfTotal = math.max(1, math.floor(total / 2))
 
 		for i, part in ipairs(parts) do
 			local isRight = i <= halfTotal
-			local localIndex = isRight and i or (i - halfTotal)
-			local ratio = localIndex / halfTotal
-
-			local sideMultiplier = isRight and 1 or -1
-			
-			-- Movimiento de aleteo mucho más extenso
-			local wingFlapY = math.sin(wingTick + (ratio * math.pi * 1.2)) * (60 * ratio)
-			local wingFlapZ = math.cos(wingTick + (ratio * math.pi)) * (30 * ratio)
-
-			-- Separación masiva entre partes
-			local spanWidth = 20 + (ratio * 110)
-			local spanHeight = 5 + (ratio * 60) + wingFlapY
-			local depthZ = 35 + (ratio * 40) + wingFlapZ
-
-			local offsetX = spanWidth * sideMultiplier
-			local offsetY = spanHeight
-			local offsetZ = depthZ
-
-			local targetCFrame = targetHRP.CFrame * CFrame.new(offsetX, offsetY, offsetZ)
-			local targetPos = targetCFrame.Position
-
-			part.AssemblyLinearVelocity = (targetPos - part.Position) * 16
-			part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+			local ratio = (isRight and i or (i - halfTotal)) / halfTotal
+			local side = isRight and 1 or -1
+			local wY = math.sin(wingTick + (ratio * math.pi * 1.2)) * (60 * ratio)
+			local wZ = math.cos(wingTick + (ratio * math.pi)) * (30 * ratio)
+			local targetPos = targetHRP.CFrame * CFrame.new((20 + ratio * 110) * side, 5 + ratio * 60 + wY, 35 + ratio * 40 + wZ)
+			part.AssemblyLinearVelocity = (targetPos.Position - part.Position) * 16
 		end
+	end, function()
+		AddControl("Aleteo", -20, 20, 1)
 	end)
 end)
 
-----------------------------------------------------
--- ELEVATOR
-----------------------------------------------------
-
-local elevatorTick = 0
-
-createButton("Elevator", Color3.fromRGB(255, 255, 80)).MouseButton1Click:Connect(function()
-	startEffect("Elevator", function()
+local cubeTick = 0
+createButton(HolderEffects, "Cube", Color3.fromRGB(200, 150, 50)).MouseButton1Click:Connect(function()
+	startEffect("Cube", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
+		cubeTick += (0.02 * effectParams["Velocidad"])
+		local parts = getParts()
+		local dist = effectParams["Distancia"]
+		local total = #parts
+		if total == 0 then return end
 
-		elevatorTick += 0.55
-		for _, part in ipairs(getParts()) do
-			local offset = Vector3.new(
-				math.random(-7, 7),
-				math.sin(elevatorTick) * 16,
-				math.random(-7, 7)
-			)
-			local targetPos = targetHRP.Position + offset - Vector3.new(0, 8, 0)
-
-			part.AssemblyLinearVelocity = (targetPos - part.Position) * 14
-			part.AssemblyAngularVelocity = Vector3.new(45, 45, 45)
+		local cubeData = wireframeShapes[1]
+		
+		for i, part in ipairs(parts) do
+			local progress = (i - 1) / total
+			local localPos = getWireframePoint(cubeData.vertices, cubeData.edges, progress) * dist
+			local rotated = CFrame.Angles(cubeTick * 0.5, cubeTick, cubeTick * 0.3) * localPos
+			part.AssemblyLinearVelocity = ((targetHRP.Position + rotated) - part.Position) * 16
+			part.AssemblyAngularVelocity = Vector3.new(0.5, 0.5, 0.5)
 		end
+	end, function()
+		AddControl("Distancia", -300, 300, 50)
+		AddControl("Velocidad", -20, 20, 1)
+	end)
+end)
+
+local triTick = 0
+createButton(HolderEffects, "Triangle 3D", Color3.fromRGB(50, 200, 100)).MouseButton1Click:Connect(function()
+	startEffect("Triangle 3D", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+		triTick += (0.02 * effectParams["Velocidad"])
+		local parts = getParts()
+		local dist = effectParams["Distancia"]
+		local total = #parts
+		if total == 0 then return end
+
+		local pyrData = wireframeShapes[3]
+		
+		for i, part in ipairs(parts) do
+			local progress = (i - 1) / total
+			local localPos = getWireframePoint(pyrData.vertices, pyrData.edges, progress) * dist
+			local rotated = CFrame.Angles(0, triTick, triTick * 0.5) * localPos
+			part.AssemblyLinearVelocity = ((targetHRP.Position + rotated) - part.Position) * 15
+		end
+	end, function()
+		AddControl("Distancia", -300, 300, 60)
+		AddControl("Velocidad", -20, 20, 1)
+	end)
+end)
+
+local circleTick = 0
+createButton(HolderEffects, "Flat Circle", Color3.fromRGB(200, 200, 200)).MouseButton1Click:Connect(function()
+	startEffect("Flat Circle", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+		circleTick += (0.03 * effectParams["Velocidad"])
+		local parts = getParts()
+		local height = effectParams["Altura de Cabeza"]
+		local maxDist = effectParams["Distancia Parts"]
+		
+		for i, part in ipairs(parts) do
+			local rnd = Random.new(i)
+			local r = math.sqrt(rnd:NextNumber()) * maxDist 
+			local theta = rnd:NextNumber(0, math.pi * 2)
+			local localPos = Vector3.new(math.cos(theta) * r, 0, math.sin(theta) * r)
+			local rotated = CFrame.Angles(0, circleTick, 0) * localPos
+			local targetPos = targetHRP.Position + Vector3.new(0, (targetHRP.Size.Y / 2) + height, 0) + rotated
+			part.AssemblyLinearVelocity = (targetPos - part.Position) * 15
+		end
+	end, function()
+		AddControl("Altura de Cabeza", -200, 200, 15)
+		AddControl("Distancia Parts", -300, 300, 60)
+		AddControl("Velocidad", -20, 20, 1)
+	end)
+end)
+
+local formsTick = 0
+local lastFormChange = 0
+local currentForm = 1
+createButton(HolderEffects, "Forms", Color3.fromRGB(255, 120, 50)).MouseButton1Click:Connect(function()
+	startEffect("Forms", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+		
+		if tick() - lastFormChange > math.max(0.05, effectParams["Segundos Cambio"]) then
+			lastFormChange = tick()
+			currentForm = (currentForm % #wireframeShapes) + 1
+		end
+		
+		formsTick += (0.02 * effectParams["Rotacion"])
+		local parts = getParts()
+		local dist = effectParams["Distancia"]
+		local total = #parts
+		if total == 0 then return end
+		
+		local shapeData = wireframeShapes[currentForm]
+		
+		for i, part in ipairs(parts) do
+			local progress = (i - 1) / total
+			local localPos = getWireframePoint(shapeData.vertices, shapeData.edges, progress) * dist
+			local rotated = CFrame.Angles(formsTick, formsTick * 0.7, formsTick * 0.4) * localPos
+			part.AssemblyLinearVelocity = ((targetHRP.Position + rotated) - part.Position) * 16
+		end
+	end, function()
+		AddControl("Distancia", -300, 300, 80)
+		AddControl("Segundos Cambio", 0.1, 3, 1)
+		AddControl("Rotacion", -20, 20, 1)
+	end)
+end)
+
+local invCrossTick = 0
+createButton(HolderEffects, "Inverted Cross", Color3.fromRGB(150, 0, 0)).MouseButton1Click:Connect(function()
+	startEffect("Inverted Cross", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+		invCrossTick += (0.02 * effectParams["Rotacion"])
+		local parts = getParts()
+		local sep = effectParams["Separacion"]
+		local height = effectParams["Altura Cabeza"]
+		local total = #parts
+		if total == 0 then return end
+		
+		local vertRatio = 0.65
+		local vertCount = math.floor(total * vertRatio)
+		
+		for i, part in ipairs(parts) do
+			local localPos = Vector3.zero
+			if i <= vertCount then
+				local t = (i - 1) / math.max(1, vertCount - 1)
+				local y = (-1.5 + (t * 2.3)) * (sep * 0.05)
+				localPos = Vector3.new(0, y, 0)
+			else
+				local t = (i - vertCount - 1) / math.max(1, (total - vertCount) - 1)
+				local x = (-0.7 + (t * 1.4)) * (sep * 0.05)
+				local y = -0.3 * (sep * 0.05)
+				localPos = Vector3.new(x, y, 0)
+			end
+			
+			local rotated = CFrame.Angles(0, invCrossTick, 0) * localPos
+			local targetPos = targetHRP.Position + Vector3.new(0, (targetHRP.Size.Y / 2) + height, 0) + rotated
+			part.AssemblyLinearVelocity = (targetPos - part.Position) * 16
+		end
+	end, function()
+		AddControl("Altura Cabeza", -100, 100, 30)
+		AddControl("Separacion", -200, 200, 40)
+		AddControl("Rotacion", -20, 20, 1)
+	end)
+end)
+
+local starTick = 0
+createButton(HolderEffects, "Star", Color3.fromRGB(255, 255, 0)).MouseButton1Click:Connect(function()
+	startEffect("Star", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+		starTick += (0.02 * effectParams["Rotacion"])
+		local parts = getParts()
+		local sep = effectParams["Separacion"]
+		local height = effectParams["Altura Cabeza"]
+		local total = #parts
+		if total == 0 then return end
+		
+		local points = {}
+		local outerRadius = sep
+		local innerRadius = sep * 0.4
+		for i = 0, 9 do
+			local r = (i % 2 == 0) and outerRadius or innerRadius
+			local angle = math.rad((i * 36) - 90)
+			table.insert(points, Vector3.new(math.cos(angle) * r, -math.sin(angle) * r, 0))
+		end
+		
+		for i, part in ipairs(parts) do
+			local progress = (i / total) * 10
+			local segment = math.floor(progress)
+			local t = progress - segment
+			
+			local p1 = points[(segment % 10) + 1]
+			local p2 = points[((segment + 1) % 10) + 1]
+			local localPos = p1:Lerp(p2, t)
+			
+			local rotated = CFrame.Angles(0, starTick, 0) * localPos
+			local targetPos = targetHRP.Position + Vector3.new(0, (targetHRP.Size.Y / 2) + height, 0) + rotated
+			part.AssemblyLinearVelocity = (targetPos - part.Position) * 15
+		end
+	end, function()
+		AddControl("Altura Cabeza", -100, 100, 30)
+		AddControl("Separacion", -200, 200, 50)
+		AddControl("Rotacion", -20, 20, 1)
 	end)
 end)
 
 ----------------------------------------------------
--- TORNADO (Hold Click - Cono Gigante)
+-- CHAOS TAB
 ----------------------------------------------------
-
-local tornadoTick = 0
-
-local TornadoButton = createButton("Tornado", Color3.fromRGB(140, 100, 255))
-
-TornadoButton.MouseButton1Click:Connect(function()
-	stopEffect()
-	tornadoHolding = true
-	Status.Text = "Effect: Hold Click For Tornado"
-end)
-
-----------------------------------------------------
--- CLICK TP
-----------------------------------------------------
-
-local ClickTPButton = createButton("Click Tp", Color3.fromRGB(255, 80, 180))
-
-ClickTPButton.MouseButton1Click:Connect(function()
+createButton(HolderChaos, "Click Tp", Color3.fromRGB(255, 80, 180)).MouseButton1Click:Connect(function()
 	stopEffect()
 	clickTpMode = true
 	Status.Text = "Effect: Click To TP"
 end)
 
-----------------------------------------------------
--- BLACK HOLE (Hold Click)
-----------------------------------------------------
+createButton(HolderChaos, "Tornado", Color3.fromRGB(140, 100, 255)).MouseButton1Click:Connect(function()
+	stopEffect()
+	tornadoHolding = true
+	Status.Text = "Effect: Hold Click For Tornado"
+end)
 
-local BlackHoleButton = createButton("Black Hole", Color3.fromRGB(20, 20, 20))
-
-BlackHoleButton.MouseButton1Click:Connect(function()
+createButton(HolderChaos, "Black Hole", Color3.fromRGB(20, 20, 20)).MouseButton1Click:Connect(function()
 	stopEffect()
 	blackHoleHolding = true
 	Status.Text = "Effect: Hold Click For Black Hole"
 end)
 
-----------------------------------------------------
--- MOUSE EVENT LISTENERS (CLICK TP, BLACK HOLE, TORNADO)
-----------------------------------------------------
-
-local bhTick = 0
-
-mouse.Button1Down:Connect(function()
-	-- Mode: Click TP
-	if clickTpMode then
-		clickTpMode = false
-		local targetPosition = getMouseTarget()
-
-		for _, part in ipairs(getParts()) do
-			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-				continue
-			end
-
-			local model = part:FindFirstAncestorOfClass("Model")
-			if model and model:FindFirstChildOfClass("Humanoid") then continue end
-			if part.AssemblyMass > 10000 then continue end
-
-			pcall(function()
-				part.AssemblyLinearVelocity = Vector3.zero
-				part.AssemblyAngularVelocity = Vector3.zero
-				part.CFrame = CFrame.new(
-					targetPosition + Vector3.new(
-						math.random(-4, 4),
-						math.random(-4, 4),
-						math.random(-4, 4)
-					)
-				)
-			end)
-		end
-
-		Status.Text = "Effect: None"
-		return
-	end
-
-	-- Mode: Black Hole (TP Ultra Agresivo y Centro Ultra Denso)
-	if blackHoleHolding then
-		startEffect("Black Hole", function()
-			local bhPos = getMouseTarget()
-			bhTick += 0.2 
-			local parts = getParts()
-
-			for i, part in ipairs(parts) do
-				if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-					continue
-				end
-
-				local model = part:FindFirstAncestorOfClass("Model")
-				if model and model:FindFirstChildOfClass("Humanoid") then continue end
-				if part.AssemblyMass > 10000 then continue end
-
-				pcall(function()
-					local diff = bhPos - part.Position
-					local dist = diff.Magnitude
-
-					if dist > 12 then
-						-- Avance directo tipo Teleport rápido al centro
-						part.CFrame = CFrame.new(part.Position:Lerp(bhPos, 0.45))
-						part.AssemblyLinearVelocity = diff.Unit * 450 + Vector3.new(math.random(-30, 30), math.random(-30, 30), math.random(-30, 30))
-					else
-						-- Centro ultra compacto, sin dispersión
-						local angle = bhTick + (i * 0.15)
-						local radius = math.clamp(dist, 0.5, 3.5)
-						local orbitOffset = Vector3.new(
-							math.cos(angle) * radius,
-							math.sin(bhTick * 2 + i) * 1.5,
-							math.sin(angle) * radius
-						)
-						local targetPos = bhPos + orbitOffset
-						
-						part.CFrame = CFrame.new(part.Position:Lerp(targetPos, 0.6))
-						part.AssemblyLinearVelocity = (targetPos - part.Position) * 50
-					end
-
-					part.AssemblyAngularVelocity = Vector3.new(400, 500, 400)
-				end)
-			end
-		end)
-		return
-	end
-
-	-- Mode: Tornado
-	if tornadoHolding then
-		startEffect("Tornado", function()
-			local mousePos = getMouseTarget()
-			if not mousePos then return end
-
-			tornadoTick += 0.18
-			local parts = getParts()
-			local total = #parts
-			if total == 0 then return end
-
-			local maxHeight = 140
-			local baseRadius = 12
-			local topRadius = 95
-
-			for i, part in ipairs(parts) do
-				if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-					continue
-				end
-
-				local model = part:FindFirstAncestorOfClass("Model")
-				if model and model:FindFirstChildOfClass("Humanoid") then continue end
-				if part.AssemblyMass > 10000 then continue end
-
-				pcall(function()
-					local progress = (i / total)
-					local currentHeight = progress * maxHeight
-					local currentRadius = baseRadius + (progress * (topRadius - baseRadius))
-
-					local angle = tornadoTick * 4 + (progress * math.pi * 4) + (i * 0.1)
-					
-					local offset = Vector3.new(
-						math.cos(angle) * currentRadius,
-						currentHeight - 20,
-						math.sin(angle) * currentRadius
-					)
-
-					local targetPos = mousePos + offset
-
-					part.AssemblyLinearVelocity = (targetPos - part.Position) * 40
-					part.AssemblyAngularVelocity = Vector3.new(0, 320, 0)
-				end)
-			end
-		end)
-		return
-	end
-end)
-
-mouse.Button1Up:Connect(function()
-	if currentEffect == "Black Hole" or currentEffect == "Tornado" then
-		stopEffect()
-	end
-end)
-
-----------------------------------------------------
--- AGGRESSIVE BRING (Área expandida, TP predictivo)
-----------------------------------------------------
-
-createButton("Aggressive Bring", Color3.fromRGB(255, 70, 70)).MouseButton1Click:Connect(function()
+createButton(HolderChaos, "Aggressive Bring", Color3.fromRGB(255, 70, 70)).MouseButton1Click:Connect(function()
 	startEffect("Aggressive Bring", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
-
 		local predictedPos = targetHRP.Position + (targetHRP.AssemblyLinearVelocity * 0.12)
-
 		for _, part in ipairs(getParts()) do
-			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-				continue
-			end
-
-			local model = part:FindFirstAncestorOfClass("Model")
-			if model and model:FindFirstChildOfClass("Humanoid") then continue end
-			if part.AssemblyMass > 10000 then continue end
-
-			pcall(function()
-				local offset = Vector3.new(
-					math.random(-35, 35),
-					math.random(-10, 20),
-					math.random(-35, 35)
-				)
-				local targetPos = predictedPos + offset
-
-				part.CFrame = CFrame.new(targetPos)
-				part.AssemblyLinearVelocity = (targetHRP.Position - part.Position) * 80 + Vector3.new(0, -20, 0)
-				part.AssemblyAngularVelocity = Vector3.new(
-					math.random(-300, 300),
-					math.random(-300, 300),
-					math.random(-300, 300)
-				)
-			end)
+			local offset = Vector3.new(math.random(-35, 35), math.random(-10, 20), math.random(-35, 35))
+			part.CFrame = CFrame.new(predictedPos + offset)
+			part.AssemblyLinearVelocity = (targetHRP.Position - part.Position) * 80 + Vector3.new(0, -20, 0)
+			part.AssemblyAngularVelocity = Vector3.new(math.random(-300, 300), math.random(-300, 300), math.random(-300, 300))
 		end
 	end)
 end)
 
-----------------------------------------------------
--- TARGET ALL (Pausa 0.5s, Área masiva y agresividad)
-----------------------------------------------------
-
-local targetAllTick = 0
-local currentTargetIndex = 1
-
-createButton("Target All", Color3.fromRGB(200, 30, 80)).MouseButton1Click:Connect(function()
+local targetAllTick, currentTargetIndex = 0, 1
+createButton(HolderChaos, "Target All", Color3.fromRGB(200, 30, 80)).MouseButton1Click:Connect(function()
 	startEffect("Target All", function()
 		local now = tick()
 		local validTargets = {}
-
 		for _, plr in ipairs(Players:GetPlayers()) do
 			if plr ~= LocalPlayer and plr.Character then
 				local hum = plr.Character:FindFirstChildOfClass("Humanoid")
 				local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-
-				if hum and hrp and hum.Health > 0 then
-					local vel = hrp.AssemblyLinearVelocity.Magnitude
-					if vel < 150 and math.abs(hrp.Position.Y) < 1000 then
-						table.insert(validTargets, hrp)
-					end
+				if hum and hrp and hum.Health > 0 and hrp.AssemblyLinearVelocity.Magnitude < 150 and math.abs(hrp.Position.Y) < 1000 then
+					table.insert(validTargets, hrp)
 				end
 			end
 		end
 
 		if #validTargets == 0 then return end
-
-		if now - targetAllTick >= 0.5 then
+		if now - targetAllTick >= effectParams["Tiempo Cambio"] then
 			targetAllTick = now
 			currentTargetIndex = (currentTargetIndex % #validTargets) + 1
 		end
 
 		local currentTargetHRP = validTargets[currentTargetIndex] or validTargets[1]
-		if not currentTargetHRP then return end
-
 		local predictedPos = currentTargetHRP.Position + (currentTargetHRP.AssemblyLinearVelocity * 0.12)
 
 		for _, part in ipairs(getParts()) do
-			if not part or not part.Parent or part.Anchored or not part:IsA("BasePart") or not part:IsDescendantOf(workspace) then
-				continue
-			end
-
-			local model = part:FindFirstAncestorOfClass("Model")
-			if model and model:FindFirstChildOfClass("Humanoid") then continue end
-			if part.AssemblyMass > 10000 then continue end
-
-			pcall(function()
-				local offset = Vector3.new(
-					math.random(-35, 35),
-					math.random(-10, 20),
-					math.random(-35, 35)
-				)
-				local targetPos = predictedPos + offset
-
-				part.CFrame = CFrame.new(targetPos)
-				part.AssemblyLinearVelocity = (currentTargetHRP.Position - part.Position) * 90
-				part.AssemblyAngularVelocity = Vector3.new(
-					math.random(-350, 350),
-					math.random(-350, 350),
-					math.random(-350, 350)
-				)
-			end)
+			part.CFrame = CFrame.new(predictedPos + Vector3.new(math.random(-35, 35), math.random(-10, 20), math.random(-35, 35)))
+			part.AssemblyLinearVelocity = (currentTargetHRP.Position - part.Position) * 90
+			part.AssemblyAngularVelocity = Vector3.new(math.random(-350, 350), math.random(-350, 350), math.random(-350, 350))
 		end
+	end, function()
+		AddControl("Tiempo Cambio", 0.1, 5, 0.5)
 	end)
 end)
 
 ----------------------------------------------------
--- STOP ALL
+-- MOUSE EVENTS (CHAOS MODE)
 ----------------------------------------------------
+local bhTick, tornadoTick = 0, 0
 
-createButton("Stop All", Color3.fromRGB(255, 60, 60)).MouseButton1Click:Connect(function()
-	stopEffect()
-
-	for part in pairs(Network.BaseParts) do
-		if part and part.Parent then
+mouse.Button1Down:Connect(function()
+	if clickTpMode then
+		clickTpMode = false
+		local targetPosition = getMouseTarget()
+		for _, part in ipairs(getParts()) do
 			pcall(function()
 				part.AssemblyLinearVelocity = Vector3.zero
 				part.AssemblyAngularVelocity = Vector3.zero
+				part.CFrame = CFrame.new(targetPosition + Vector3.new(math.random(-4, 4), math.random(-4, 4), math.random(-4, 4)))
 			end)
 		end
+		Status.Text = "Effect: None"
+		return
 	end
 
-	if Character then
-		for _, v in ipairs(Character:GetDescendants()) do
-			if v:IsA("BasePart") then
+	if blackHoleHolding then
+		startEffect("Black Hole", function()
+			local bhPos = getMouseTarget()
+			bhTick += 0.2 
+			for i, part in ipairs(getParts()) do
 				pcall(function()
-					v.AssemblyLinearVelocity = Vector3.zero
-					v.AssemblyAngularVelocity = Vector3.zero
+					local diff = bhPos - part.Position
+					local dist = diff.Magnitude
+					if dist > 12 then
+						part.CFrame = CFrame.new(part.Position:Lerp(bhPos, 0.45))
+						part.AssemblyLinearVelocity = diff.Unit * 450 + Vector3.new(math.random(-30,30), math.random(-30,30), math.random(-30,30))
+					else
+						local angle = bhTick + (i * 0.15)
+						local r = math.clamp(dist, 0.5, 3.5)
+						local targetPos = bhPos + Vector3.new(math.cos(angle)*r, math.sin(bhTick*2+i)*1.5, math.sin(angle)*r)
+						part.CFrame = CFrame.new(part.Position:Lerp(targetPos, 0.6))
+						part.AssemblyLinearVelocity = (targetPos - part.Position) * 50
+					end
+					part.AssemblyAngularVelocity = Vector3.new(400, 500, 400)
 				end)
 			end
-		end
+		end)
+	end
+
+	if tornadoHolding then
+		startEffect("Tornado", function()
+			local mousePos = getMouseTarget()
+			if not mousePos then return end
+			tornadoTick += 0.18
+			local parts = getParts()
+			local total = #parts
+			for i, part in ipairs(parts) do
+				pcall(function()
+					local p = (i / total)
+					local currentHeight = p * 140
+					local currentRadius = 12 + (p * 83)
+					local angle = tornadoTick * 4 + (p * math.pi * 4) + (i * 0.1)
+					local targetPos = mousePos + Vector3.new(math.cos(angle)*currentRadius, currentHeight - 20, math.sin(angle)*currentRadius)
+					part.AssemblyLinearVelocity = (targetPos - part.Position) * 40
+					part.AssemblyAngularVelocity = Vector3.new(0, 320, 0)
+				end)
+			end
+		end)
 	end
 end)
+
+mouse.Button1Up:Connect(function()
+	if currentEffect == "Black Hole" or currentEffect == "Tornado" then stopEffect() end
+end)
+
+----------------------------------------------------
+-- STOP ALL UNIVERSAL
+----------------------------------------------------
+local StopAllMain = createButton(Main, "Stop All", Color3.fromRGB(255, 60, 60))
+StopAllMain.Size = UDim2.new(1, -20, 0, 40)
+StopAllMain.Position = UDim2.new(0, 10, 1, -50)
+StopAllMain.MouseButton1Click:Connect(stopEffect)
+
+local StopAllControl = createButton(ControlFrame, "Stop All", Color3.fromRGB(255, 60, 60))
+StopAllControl.Size = UDim2.new(1, -16, 0, 40)
+StopAllControl.Position = UDim2.new(0, 8, 1, -48)
+StopAllControl.MouseButton1Click:Connect(stopEffect)
 
 ----------------------------------------------------
 -- MINIMIZE & CLOSE BUTTONS
 ----------------------------------------------------
-
-local Minimize = Instance.new("TextButton")
-Minimize.Parent = Main
+local Minimize = Instance.new("TextButton", Main)
 Minimize.Size = UDim2.new(0, 28, 0, 28)
 Minimize.Position = UDim2.new(1, -68, 0, 8)
 Minimize.Text = "-"
@@ -875,12 +1087,9 @@ Minimize.Font = Enum.Font.GothamBold
 Minimize.TextSize = 18
 Minimize.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 Minimize.TextColor3 = Color3.new(1, 1, 1)
-Minimize.BorderSizePixel = 0
-
 Instance.new("UICorner", Minimize).CornerRadius = UDim.new(1, 0)
 
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Parent = Main
+local CloseBtn = Instance.new("TextButton", Main)
 CloseBtn.Size = UDim2.new(0, 28, 0, 28)
 CloseBtn.Position = UDim2.new(1, -36, 0, 8)
 CloseBtn.Text = "X"
@@ -888,51 +1097,38 @@ CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 15
 CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
 CloseBtn.TextColor3 = Color3.new(1, 1, 1)
-CloseBtn.BorderSizePixel = 0
-
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(1, 0)
 
 local minimized = false
-
 Minimize.MouseButton1Click:Connect(function()
 	minimized = not minimized
-
 	if minimized then
-		Holder.Visible = false
+		HolderEffects.Visible = false
+		HolderChaos.Visible = false
 		SearchBox.Visible = false
-
-		Main:TweenSize(
-			UDim2.new(0, 430, 0, 80),
-			Enum.EasingDirection.Out,
-			Enum.EasingStyle.Quad,
-			0.2,
-			true
-		)
+		TabFrame.Visible = false
+		StopAllMain.Visible = false
+		ControlFrame.Visible = false
+		Main:TweenSize(UDim2.new(0, 430, 0, 80), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.2, true)
 		Minimize.Text = "+"
 	else
-		Holder.Visible = true
+		if TabEffects.BackgroundColor3 == Color3.fromRGB(40, 40, 40) then HolderEffects.Visible = true else HolderChaos.Visible = true end
 		SearchBox.Visible = true
-
-		Main:TweenSize(
-			UDim2.new(0, 430, 0, 450),
-			Enum.EasingDirection.Out,
-			Enum.EasingStyle.Quad,
-			0.2,
-			true
-		)
+		TabFrame.Visible = true
+		StopAllMain.Visible = true
+		if currentEffect and next(effectParams) then ControlFrame.Visible = true end
+		Main:TweenSize(UDim2.new(0, 430, 0, 500), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.2, true)
 		Minimize.Text = "-"
 	end
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
 	stopEffect()
-
+	TargetHighlight:Destroy()
 	if descendantConn then descendantConn:Disconnect() end
 	if scanConn then scanConn:Disconnect() end
 	if networkConn then networkConn:Disconnect() end
 	if playerRemovingConn then playerRemovingConn:Disconnect() end
-
 	getgenv().Network.BaseParts = {}
-
 	gui:Destroy()
 end)
