@@ -45,22 +45,6 @@ end
 ----------------------------------------------------
 -- NETWORK / PART CONTROL
 ----------------------------------------------------
---[[
-	Detección revisada:
-	1) Anchored == false ya NO se considera suficiente.
-	2) Se comprueba AssemblyRootPart para descartar piezas
-	   físicamente atadas a una assembly anclada.
-	3) Las assemblies se tratan como una sola unidad:
-	   getParts() devuelve únicamente el root de cada assembly.
-	   Esto evita aplicar velocidades/CFrames diferentes a cada
-	   miembro de un mismo objeto soldado.
-	4) Se elimina el "empujón" artificial de cada Heartbeat,
-	   que estaba alterando piezas que simplemente estaban quietas.
-	5) La caché se actualiza periódicamente para detectar piezas
-	   que pasan de Anchored=true a Anchored=false sin hacer
-	   GetDescendants() en cada frame.
---]]
-
 getgenv().Network = getgenv().Network or {}
 getgenv().Network.BaseParts = {}
 getgenv().Network.ValidParts = {}
@@ -85,9 +69,6 @@ local function getAssemblyRoot(part)
 	return part
 end
 
--- Devuelve el Humanoid al que pertenece la part, si existe.
--- Se busca hacia arriba para cubrir Character/NPCs, accesorios y
--- modelos con parts anidadas.
 local function getPartHumanoid(part)
 	if not part or not part.Parent then
 		return nil
@@ -122,21 +103,15 @@ local function isLoosePart(part)
 		return false
 	end
 
-	-- No detectar/mover parts pertenecientes a Humanoids VIVOS.
-	-- Cuando Health <= 0, las parts del cuerpo vuelven a ser válidas
-	-- para los efectos (por ejemplo, un cuerpo/ragdoll ya muerto).
 	local humanoid = getPartHumanoid(part)
 	if humanoid and humanoid.Health > 0 then
 		return false
 	end
 
-	-- Una pieza realmente anclada nunca es válida.
 	if part.Anchored then
 		return false
 	end
 
-	-- Una part puede tener Anchored=false y aun así pertenecer a
-	-- una assembly cuyo root está anclado.
 	local root = getAssemblyRoot(part)
 
 	if root then
@@ -148,8 +123,6 @@ local function isLoosePart(part)
 			return false
 		end
 
-		-- Comprobar también el Humanoid del root evita que una
-		-- assembly de un personaje vivo entre por otra part.
 		local rootHumanoid = getPartHumanoid(root)
 		if rootHumanoid and rootHumanoid.Health > 0 then
 			return false
@@ -189,7 +162,6 @@ local function refreshValidPartCache()
 		else
 			local root = getAssemblyRoot(part)
 
-			-- Solo trabajamos una vez por assembly.
 			if root and not seenAssemblies[root] then
 				seenAssemblies[root] = true
 				table.insert(valid, root)
@@ -200,18 +172,15 @@ local function refreshValidPartCache()
 	Network.ValidParts = valid
 end
 
--- Registro inicial.
 scanWorkspaceParts()
 refreshValidPartCache()
 
--- Detecta piezas nuevas inmediatamente.
 local descendantConn = workspace.DescendantAdded:Connect(function(instance)
 	if instance:IsA("BasePart") then
 		retainPart(instance)
 	end
 end)
 
--- Escaneo lento solamente para detectar cambios de Anchored/assembly.
 local scanTimer = 0
 local cacheTimer = 0
 
@@ -231,8 +200,6 @@ local scanConn = RunService.Heartbeat:Connect(function(dt)
 	end
 end)
 
--- SimulationRadius se actualiza con baja frecuencia.
--- Ya NO se modifica la velocidad de cada pieza automáticamente.
 local simulationTimer = 0
 
 local networkConn = RunService.Heartbeat:Connect(function(dt)
@@ -269,7 +236,6 @@ local function getWireframePoint(vertices, edges, progress)
 end
 
 local wireframeShapes = {
-	-- 1. Cubo Wireframe
 	{
 		vertices = {
 			Vector3.new(-1, -1, -1), Vector3.new(1, -1, -1), Vector3.new(1, 1, -1), Vector3.new(-1, 1, -1),
@@ -281,7 +247,6 @@ local wireframeShapes = {
 			{1,5}, {2,6}, {3,7}, {4,8}
 		}
 	},
-	-- 2. Octaedro / Diamante 3D
 	{
 		vertices = {
 			Vector3.new(0, 1.2, 0), Vector3.new(0, -1.2, 0),
@@ -294,7 +259,6 @@ local wireframeShapes = {
 			{3,5}, {5,4}, {4,6}, {6,3}
 		}
 	},
-	-- 3. Pirámide 3D
 	{
 		vertices = {
 			Vector3.new(0, 1, 0),
@@ -306,7 +270,6 @@ local wireframeShapes = {
 			{1,2}, {1,3}, {1,4}, {1,5}
 		}
 	},
-	-- 4. Prisma Triangular 3D
 	{
 		vertices = {
 			Vector3.new(0, 1, 0.8), Vector3.new(-0.866, -0.5, 0.8), Vector3.new(0.866, -0.5, 0.8),
@@ -318,7 +281,6 @@ local wireframeShapes = {
 			{1,4}, {2,5}, {3,6}
 		}
 	},
-	-- 5. Estrella 3D (Doble Pirámide)
 	{
 		vertices = {
 			Vector3.new(0, 1.5, 0), Vector3.new(0, -1.5, 0),
@@ -334,7 +296,7 @@ local wireframeShapes = {
 }
 
 ----------------------------------------------------
--- VARIABLES
+-- VARIABLES GLOBALES & ESTADOS
 ----------------------------------------------------
 local currentEffect = nil
 local effectConnection = nil
@@ -346,6 +308,9 @@ local clickTpMode = false
 
 local effectParams = {}
 local activeControlConnections = {}
+
+local originalFallenPartsHeight = workspace.FallenPartsDestroyHeight
+local activeKill = false
 
 ----------------------------------------------------
 -- GUI MAIN
@@ -368,7 +333,7 @@ Stroke.Parent = Main
 Stroke.Color = Color3.fromRGB(70, 70, 70)
 
 ----------------------------------------------------
--- TARGET HIGHLIGHT (BRILLO INTENSO Y SOLO OBJETIVOS)
+-- TARGET HIGHLIGHT 
 ----------------------------------------------------
 local TargetHighlight = Instance.new("Highlight")
 TargetHighlight.Name = "TargetGlow"
@@ -553,12 +518,20 @@ TabChaos.MouseButton1Click:Connect(function()
 	TabEffects.TextColor3 = Color3.new(0.6, 0.6, 0.6)
 end)
 
+----------------------------------------------------
+-- FUNCIONES PRINCIPALES
+----------------------------------------------------
 local function stopEffect()
 	currentEffect = nil
 	Status.Text = "Effect: None"
 	blackHoleHolding = false
 	tornadoHolding = false
 	clickTpMode = false
+
+	if activeKill then
+		workspace.FallenPartsDestroyHeight = originalFallenPartsHeight
+		activeKill = false
+	end
 
 	if effectConnection then
 		effectConnection:Disconnect()
@@ -578,14 +551,12 @@ local function stopEffect()
 			pcall(function()
 				part.AssemblyLinearVelocity = Vector3.zero
 				part.AssemblyAngularVelocity = Vector3.zero
+				part.CanCollide = true
 			end)
 		end
 	end
 end
 
-----------------------------------------------------
--- PLAYER SEARCH
-----------------------------------------------------
 local function findPlayer(str)
 	str = string.lower(str)
 	for _, plr in ipairs(Players:GetPlayers()) do
@@ -622,9 +593,6 @@ local playerRemovingConn = Players.PlayerRemoving:Connect(function(plr)
 	end
 end)
 
-----------------------------------------------------
--- SLIDER SYSTEM FLUIDO, PERSISTENTE Y AUTO-ZERO
-----------------------------------------------------
 local function AddControl(paramName, minVal, softMax, defaultVal)
 	ControlFrame.Visible = true
 
@@ -689,7 +657,7 @@ local function AddControl(paramName, minVal, softMax, defaultVal)
 			if barSize > 0 then
 				local p = math.clamp((mousePos - barAbs) / barSize, 0, 1)
 				local val = minVal + (p * (softMax - minVal))
-				val = math.floor(val * 100) / 100 -- Alta precisión para movimientos fluidos
+				val = math.floor(val * 100) / 100
 				
 				SliderBtn.Position = UDim2.new(p, 0, 0.5, 0)
 				Input.Text = tostring(val)
@@ -700,7 +668,6 @@ local function AddControl(paramName, minVal, softMax, defaultVal)
 		end
 	end))
 
-	-- Al dar click limpia el texto, y si se deja vacío pone 0 automáticamente
 	table.insert(activeControlConnections, Input.Focused:Connect(function()
 		Input.Text = ""
 	end))
@@ -720,9 +687,6 @@ local function AddControl(paramName, minVal, softMax, defaultVal)
 	end))
 end
 
-----------------------------------------------------
--- SYSTEM UTILS
-----------------------------------------------------
 local function createButton(parent, text, color)
 	local b = Instance.new("TextButton")
 	b.Parent = parent
@@ -760,7 +724,6 @@ local function getTargetHRP()
 	return nil
 end
 
--- Actualiza el brillo ÚNICAMENTE en otros jugadores (NO en ti mismo)
 RunService.Heartbeat:Connect(function()
 	if selectedPlayer and selectedPlayer ~= LocalPlayer and selectedPlayer.Character then
 		local hrp = selectedPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -778,18 +741,20 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
-local function getParts()
+local function getParts(ignoreDistance)
 	local valid = {}
 	local myPos = HRP and HRP.Position or Vector3.zero
 	local maxDistanceSq = MAX_PART_DISTANCE * MAX_PART_DISTANCE
 
-	-- ValidParts ya contiene únicamente roots de assemblies libres.
-	-- Aquí solo hacemos la comprobación de distancia.
 	for _, part in ipairs(Network.ValidParts) do
 		if isLoosePart(part) then
-			local offset = part.Position - myPos
-			if offset:Dot(offset) <= maxDistanceSq then
+			if ignoreDistance then
 				table.insert(valid, part)
+			else
+				local offset = part.Position - myPos
+				if offset:Dot(offset) <= maxDistanceSq then
+					table.insert(valid, part)
+				end
 			end
 		end
 	end
@@ -814,7 +779,6 @@ end
 ----------------------------------------------------
 -- EFFECTS TAB
 ----------------------------------------------------
-
 createButton(HolderEffects, "Lift", Color3.fromRGB(60, 120, 255)).MouseButton1Click:Connect(function()
 	startEffect("Lift", function()
 		for _, part in ipairs(getParts()) do
@@ -1008,40 +972,48 @@ createButton(HolderEffects, "Forms", Color3.fromRGB(255, 120, 50)).MouseButton1C
 end)
 
 local invCrossTick = 0
-createButton(HolderEffects, "Inverted Cross", Color3.fromRGB(150, 0, 0)).MouseButton1Click:Connect(function()
-	startEffect("Inverted Cross", function()
+createButton(HolderEffects, "Inverted Cross 3D", Color3.fromRGB(150, 0, 0)).MouseButton1Click:Connect(function()
+	startEffect("Inverted Cross 3D", function()
 		local targetHRP = getTargetHRP()
 		if not targetHRP then return end
 		invCrossTick += (0.02 * effectParams["Rotacion"])
 		local parts = getParts()
 		local sep = effectParams["Separacion"]
 		local height = effectParams["Altura Cabeza"]
+		local prof = effectParams["Profundidad 3D"]
 		local total = #parts
 		if total == 0 then return end
 		
 		local vertRatio = 0.65
 		local vertCount = math.floor(total * vertRatio)
+		local horizCount = total - vertCount
 		
 		for i, part in ipairs(parts) do
 			local localPos = Vector3.zero
+			local depthOffset = math.sin(i * 137.5) * prof
+			local widthSpread = math.cos(i * 137.5) * (sep * 0.1)
+
 			if i <= vertCount then
 				local t = (i - 1) / math.max(1, vertCount - 1)
 				local y = (-1.5 + (t * 2.3)) * (sep * 0.05)
-				localPos = Vector3.new(0, y, 0)
+				localPos = Vector3.new(widthSpread, y, depthOffset)
 			else
-				local t = (i - vertCount - 1) / math.max(1, (total - vertCount) - 1)
+				local t = (i - vertCount - 1) / math.max(1, horizCount - 1)
 				local x = (-0.7 + (t * 1.4)) * (sep * 0.05)
 				local y = -0.3 * (sep * 0.05)
-				localPos = Vector3.new(x, y, 0)
+				localPos = Vector3.new(x, y + widthSpread, depthOffset)
 			end
 			
-			local rotated = CFrame.Angles(0, invCrossTick, 0) * localPos
+			local rotated = CFrame.Angles(invCrossTick * 0.3, invCrossTick, invCrossTick * 0.1) * localPos
 			local targetPos = targetHRP.Position + Vector3.new(0, (targetHRP.Size.Y / 2) + height, 0) + rotated
+			
 			part.AssemblyLinearVelocity = (targetPos - part.Position) * 16
+			part.AssemblyAngularVelocity = Vector3.new(0.5, 0.5, 0.5)
 		end
 	end, function()
 		AddControl("Altura Cabeza", -100, 100, 30)
-		AddControl("Separacion", -200, 200, 40)
+		AddControl("Separacion", -200, 200, 50)
+		AddControl("Profundidad 3D", 0, 100, 12)
 		AddControl("Rotacion", -20, 20, 1)
 	end)
 end)
@@ -1118,6 +1090,60 @@ createButton(HolderChaos, "Aggressive Bring", Color3.fromRGB(255, 70, 70)).Mouse
 			part.CFrame = CFrame.new(predictedPos + offset)
 			part.AssemblyLinearVelocity = (targetHRP.Position - part.Position) * 80 + Vector3.new(0, -20, 0)
 			part.AssemblyAngularVelocity = Vector3.new(math.random(-300, 300), math.random(-300, 300), math.random(-300, 300))
+		end
+	end)
+end)
+
+createButton(HolderChaos, "Kill", Color3.fromRGB(255, 0, 0)).MouseButton1Click:Connect(function()
+	startEffect("Kill", function()
+		local targetHRP = getTargetHRP()
+		if not targetHRP then return end
+		
+		-- Desactivación local del vacío estricta
+		if not activeKill then
+			originalFallenPartsHeight = workspace.FallenPartsDestroyHeight
+			workspace.FallenPartsDestroyHeight = -100000 
+			activeKill = true
+		end
+
+		local tickTime = tick() * 35 -- Velocidad de órbita rápida para generar fuerza centrífuga
+		local parts = getParts(true) -- Ignora la distancia
+		
+		-- Predicción avanzada de movimiento para rastrear al enemigo al instante
+		local predictedPos = targetHRP.Position + (targetHRP.AssemblyLinearVelocity * 0.15)
+
+		for i, part in ipairs(parts) do
+			pcall(function()
+				part.CanCollide = false
+				
+				-- Radio ultra compacto (mantiene las piezas pegadas al objetivo)
+				local radius = 1 + (i % 2)
+				local angle = tickTime + (i * 0.7)
+				
+				local offsetX = math.cos(angle) * radius
+				local offsetZ = math.sin(angle) * radius
+				local offsetY = (i % 3) - 1
+				
+				-- Concentración directa en el centro para alternar impactos secos
+				if i % 2 == 0 then
+					offsetX, offsetY, offsetZ = 0, 0, 0
+				end
+
+				local targetPos = predictedPos + Vector3.new(offsetX, offsetY, offsetZ)
+				
+				-- Posicionamiento rígido y estable
+				part.CFrame = CFrame.new(part.Position:Lerp(targetPos, 0.95))
+				
+				-- Fling masivo: Fuerza extrema hacia el centro combinada con un tirón vertical caótico
+				part.AssemblyLinearVelocity = (targetHRP.Position - part.Position) * 800 + Vector3.new(0, 150, 0)
+				
+				-- Rotación brutal para forzar el motor de físicas a desestabilizar al avatar (Fling)
+				part.AssemblyAngularVelocity = Vector3.new(
+					math.random(-2000, 2000), 
+					math.random(-2000, 2000), 
+					math.random(-2000, 2000)
+				)
+			end)
 		end
 	end)
 end)
